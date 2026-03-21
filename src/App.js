@@ -1,25 +1,617 @@
-import logo from './logo.svg';
-import './App.css';
+import React, { useState, useEffect, useCallback, useRef } from "react";
 
-function App() {
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const STORAGE_KEY = "innova_v4";
+const BANNER_KEY  = "innova_gdpr_v1";
+
+const IT_MONTHS = {
+  gen:0, feb:1, mar:2, apr:3, mag:4, giu:5,
+  lug:6, ago:7, set:8, ott:9, nov:10, dic:11
+};
+
+const DISC_STATUS = {
+  completata:     { dot:"#10b981", bg:"#ecfdf5", text:"#065f46", label:"Completata" },
+  "in-corso":     { dot:"#3b82f6", bg:"#eff6ff", text:"#1e40af", label:"In corso" },
+  "non-iniziata": { dot:"#94a3b8", bg:"#f8fafc", text:"#475569", label:"Non iniziata" },
+  sospesa:        { dot:"#f59e0b", bg:"#fffbeb", text:"#92400e", label:"Sospesa" },
+  "in-ritardo":   { dot:"#ef4444", bg:"#fef2f2", text:"#991b1b", label:"In ritardo" },
+};
+
+const SEM = {
+  verde:   { color:"#10b981", bg:"#d1fae5", label:"On track" },
+  arancio: { color:"#f59e0b", bg:"#fef3c7", label:"Attenzione" },
+  rosso:   { color:"#ef4444", bg:"#fee2e2", label:"Critico" },
+};
+
+const AL = {
+  rosso:   { color:"#ef4444", bg:"#fef2f2", border:"#fca5a5" },
+  arancio: { color:"#f59e0b", bg:"#fffbeb", border:"#fcd34d" },
+  giallo:  { color:"#d97706", bg:"#fefce8", border:"#fde68a" },
+};
+
+const CLINICIANS = ["Dr. Rossi","Dott.ssa Bianchi","Dr. Ferrari","Dott.ssa Martini"];
+
+const DISC_OPTIONS = [
+  "Diagnostica","Igiene","Parodontologia","Conservativa","Endodonzia",
+  "Implantologia","Osseointegrazione","Chirurgia","Protesi provvisoria",
+  "Protesi definitiva","Ortodonzia","Gnatologia","Mantenimento SPT"
+];
+
+const CONSENTS = [
+  { key:"consensoSanitario", label:"Trattamento dati sanitari", required:true,  legal:"Art. 9 GDPR" },
+  { key:"consensoWhatsApp",  label:"Comunicazioni WhatsApp",   required:false, legal:"Art. 6 GDPR lett. a" },
+  { key:"consensoMarketing", label:"Marketing e promozioni",   required:false, legal:"Art. 6 GDPR lett. a" },
+  { key:"consensoTerzi",     label:"Trasmissione a terzi",     required:false, legal:"Art. 6 GDPR lett. a" },
+];
+
+const SUGGESTED = [
+  "Come apro un percorso paziente?",
+  "Cosa significa il semaforo rosso?",
+  "Come funziona la timeline?",
+  "Come gestisco il consenso GDPR?",
+  "Quando scatta un alert arancio?",
+  "Cosa fare se il paziente è fermo?",
+];
+
+const SYSTEM_PROMPT = `Sei l'assistente del Cruscotto Paziente 360° di Innova Clinique, studio odontoiatrico a Domodossola (VCO).
+Rispondi SOLO su: utilizzo del sistema, gestione flusso paziente, protocolli clinico-organizzativi, GDPR odontoiatrico.
+Italiano, diretto, max 180 parole.
+
+SEMAFORI TIMELINE: Verde=completata/nei tempi | Blu=in corso ok | Arancio=ritardo 15-30% | Rosso=ritardo>30%/scaduta | Grigio=non iniziata.
+PROTOCOLLI: Igiene ogni 3 mesi durante implantologia | Osseointegrazione 3-6 mesi | Paro rivalutazione 8-12 settimane | Post-chirurgia entro 10 giorni.
+GDPR: Art.9 consenso scritto obbligatorio | Conservazione 10 anni D.Lgs.229/1999 | WhatsApp solo con consenso.
+ALERT: Rosso=24h | Arancio=3gg | Giallo=7gg.`;
+
+// ─── STORAGE (localStorage) ───────────────────────────────────────────────────
+const storage = {
+  get: (key) => {
+    try { const v = localStorage.getItem(key); return v ? { value: v } : null; } catch { return null; }
+  },
+  set: (key, value) => {
+    try { localStorage.setItem(key, value); return true; } catch { return false; }
+  },
+  delete: (key) => {
+    try { localStorage.removeItem(key); return true; } catch { return false; }
+  },
+};
+
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+function getToday() {
+  const d = new Date();
+  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+}
+function getTodayFull() {
+  const d = new Date();
+  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+function parseMonthYear(str) {
+  if (!str || str === "—" || str.toLowerCase() === "ongoing") return null;
+  const parts = str.trim().toLowerCase().split(/\s+/);
+  if (parts.length < 2) return null;
+  const m = IT_MONTHS[parts[0]]; const y = parseInt(parts[1]);
+  if (m === undefined || isNaN(y)) return null;
+  return new Date(y, m, 1);
+}
+function fmtMonthYear(d) {
+  const ms = ["Gen","Feb","Mar","Apr","Mag","Giu","Lug","Ago","Set","Ott","Nov","Dic"];
+  return `${ms[d.getMonth()]} ${d.getFullYear()}`;
+}
+function addMonths(d, n) { const r = new Date(d); r.setMonth(r.getMonth() + n); return r; }
+function monthDiff(a, b) { return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()); }
+function retentionDate(s) {
+  try { const [d, m, y] = s.split('/'); return `${d}/${m}/${parseInt(y) + 10}`; } catch { return "—"; }
+}
+function makeAuditEntry(azione, dettaglio, operatore) {
+  return { id: Date.now() + Math.random(), ts: getTodayFull(), azione, dettaglio, operatore: operatore || "Operatore" };
+}
+function defaultGdpr(d) {
+  return {
+    consensoSanitario: { granted:false, date:null, method:"firma_modulo" },
+    consensoWhatsApp:  { granted:false, date:null, method:"firma_modulo" },
+    consensoMarketing: { granted:false, date:null, method:"firma_modulo" },
+    consensoTerzi:     { granted:false, date:null, method:"firma_modulo" },
+    dataCreazione: d, scadenzaRetenzione: retentionDate(d), note: "",
+  };
+}
+function sessionProgress(sess) {
+  if (!sess || sess === "—" || sess.includes("∞")) return null;
+  const p = sess.split('/'); if (p.length < 2) return null;
+  const done = parseInt(p[0]), tot = parseInt(p[1]);
+  if (isNaN(done) || isNaN(tot) || tot === 0) return null;
+  return Math.min(done / tot, 1);
+}
+function timelineColor(disc, today) {
+  const start = parseMonthYear(disc.start), end = parseMonthYear(disc.end);
+  const ongoing = disc.end && disc.end.toLowerCase() === "ongoing";
+  const prog = sessionProgress(disc.sessions);
+  if (disc.status === "completata")  return { bar:"#10b981", label:"Completata" };
+  if (disc.status === "sospesa")     return { bar:"#94a3b8", label:"Sospesa" };
+  if (disc.status === "in-ritardo")  return { bar:"#ef4444", label:"In ritardo" };
+  if (disc.status === "non-iniziata") {
+    if (!start) return { bar:"#94a3b8", label:"Non pianif." };
+    if (today > start) { const o = monthDiff(start, today); if (o > 2) return { bar:"#ef4444", label:"Avvio ritard." }; return { bar:"#f59e0b", label:"Avvio ritard." }; }
+    return { bar:"#94a3b8", label:"Non iniziata" };
+  }
+  if (!end && !ongoing) return { bar:"#3b82f6", label:"In corso" };
+  if (ongoing) return { bar:"#3b82f6", label:"Continua" };
+  if (today > end) return { bar:"#ef4444", label:"Scaduta" };
+  const totalM = monthDiff(start || today, end), elapsedM = monthDiff(start || today, today);
+  const timePct = totalM > 0 ? elapsedM / totalM : 0;
+  if (prog !== null) { const gap = timePct - prog; if (gap > 0.3) return { bar:"#ef4444", label:"In ritardo" }; if (gap > 0.15) return { bar:"#f59e0b", label:"Lieve ritardo" }; }
+  return { bar:"#3b82f6", label:"Nei tempi" };
+}
+function calcStatus(disciplines, alerts) {
+  const open = (alerts || []).filter(a => a.open);
+  if (open.some(a => a.level === "rosso") || (disciplines || []).some(d => d.status === "in-ritardo")) return "rosso";
+  if (open.some(a => a.level === "arancio")) return "arancio";
+  return "verde";
+}
+function makeNewId(patients) { return `PAZ-${String((patients || []).length + 1).padStart(3, "0")}`; }
+
+// ─── SEED DATA ────────────────────────────────────────────────────────────────
+function makeSeed() {
+  function gd(d) { return { consensoSanitario:{granted:true,date:d,method:"firma_modulo"}, consensoWhatsApp:{granted:true,date:d,method:"firma_modulo"}, consensoMarketing:{granted:false,date:null,method:"firma_modulo"}, consensoTerzi:{granted:false,date:null,method:"firma_modulo"}, dataCreazione:d, scadenzaRetenzione:retentionDate(d), note:"" }; }
+  function log(d, n) { return [ {id:1,ts:`${d} 09:00`,azione:"Apertura percorso",dettaglio:`Piano accettato — ${n}`,operatore:"Segreteria"}, {id:2,ts:`${d} 09:05`,azione:"Consenso sanitario",dettaglio:"Firmato",operatore:"Segreteria"} ]; }
+  return [
+    { id:"FER-001", name:"Marco Ferri", age:52, phone:"+39 338 123 4567", acceptedDate:"17/03/2026", clinician:"Dr. Rossi", planValue:18400, invoiced:1200, status:"arancio", tags:["full-mouth","impianti"], currentPhase:"Parodontologia — SRP fase iniziale", lastVisit:"17/03/2026", nextVisit:"24/03/2026", progress:8, totalMonths:28,
+      disciplines:[ {id:1,name:"Diagnostica",status:"completata",start:"Mar 2026",end:"Mar 2026",sessions:"1/1",notes:"CBCT, OPT, wax-up"}, {id:2,name:"Parodontologia",status:"in-corso",start:"Mar 2026",end:"Giu 2026",sessions:"1/4",notes:"SRP 4 quadranti"}, {id:3,name:"Igiene",status:"in-corso",start:"Mar 2026",end:"Ongoing",sessions:"0/∞",notes:"⚠ Ogni 3 mesi obbligatoria"}, {id:4,name:"Implantologia",status:"non-iniziata",start:"Giu 2026",end:"Ago 2026",sessions:"0/4",notes:"4 impianti"}, {id:5,name:"Osseointegrazione",status:"non-iniziata",start:"Ago 2026",end:"Feb 2027",sessions:"—",notes:"6 mesi attesa"}, {id:6,name:"Protesi definitiva",status:"non-iniziata",start:"Mar 2027",end:"Mar 2028",sessions:"0/4",notes:""} ],
+      alerts:[ {id:1,level:"arancio",text:"Rivalutazione parodontale — prenotare",due:"10/06/2026",open:true}, {id:2,level:"rosso",text:"Igiene mese 3: blocca iter implantare se saltata",due:"24/06/2026",open:true} ],
+      gdpr:gd("17/03/2026"), auditLog:log("17/03/2026","Marco Ferri") },
+    { id:"MAN-002", name:"Roberto Mancini", age:61, phone:"+39 333 456 7890", acceptedDate:"15/10/2025", clinician:"Dr. Rossi", planValue:7200, invoiced:3600, status:"rosso", tags:["impianti","critico"], currentPhase:"⚠ FERMO — 48 giorni fa", lastVisit:"29/01/2026", nextVisit:"Non fissata", progress:50, totalMonths:12,
+      disciplines:[ {id:1,name:"Diagnostica",status:"completata",start:"Ott 2025",end:"Ott 2025",sessions:"1/1",notes:""}, {id:2,name:"Implantologia",status:"completata",start:"Nov 2025",end:"Dic 2025",sessions:"2/2",notes:"2 impianti arcata inf."}, {id:3,name:"Osseointegrazione",status:"in-corso",start:"Dic 2025",end:"Giu 2026",sessions:"—",notes:"Mese 3 — nessun rx"}, {id:4,name:"Igiene",status:"in-ritardo",start:"Nov 2025",end:"Ongoing",sessions:"1/∞",notes:"⚠ 4 mesi fa — rischio perimplantite"}, {id:5,name:"Protesi",status:"non-iniziata",start:"Giu 2026",end:"Set 2026",sessions:"0/3",notes:""} ],
+      alerts:[ {id:1,level:"rosso",text:"Igiene non eseguita 4+ mesi",due:"SCADUTO",open:true}, {id:2,level:"rosso",text:"Terapia ferma 48 giorni",due:"URGENTE",open:true} ],
+      gdpr:gd("15/10/2025"), auditLog:log("15/10/2025","Roberto Mancini") },
+    { id:"COL-003", name:"Anna Colombo", age:34, phone:"+39 345 987 6543", acceptedDate:"02/01/2026", clinician:"Dott.ssa Bianchi", planValue:4800, invoiced:1600, status:"verde", tags:["ortodonzia"], currentPhase:"Ortodonzia — mese 5", lastVisit:"10/03/2026", nextVisit:"22/04/2026", progress:21, totalMonths:26,
+      disciplines:[ {id:1,name:"Igiene pre-bonding",status:"completata",start:"Gen 2026",end:"Gen 2026",sessions:"2/2",notes:""}, {id:2,name:"Ortodonzia",status:"in-corso",start:"Feb 2026",end:"Feb 2028",sessions:"5/24",notes:"Ogni 6 settimane"}, {id:3,name:"Igiene mantenimento",status:"in-corso",start:"Feb 2026",end:"Ongoing",sessions:"2/∞",notes:"Ogni 3 mesi"} ],
+      alerts:[ {id:1,level:"giallo",text:"Igiene in scadenza",due:"05/04/2026",open:true} ],
+      gdpr:gd("02/01/2026"), auditLog:log("02/01/2026","Anna Colombo") },
+    { id:"FER-005", name:"Giulia Ferretti", age:41, phone:"+39 347 234 5678", acceptedDate:"10/02/2026", clinician:"Dott.ssa Bianchi", planValue:3200, invoiced:1100, status:"verde", tags:["conservativa"], currentPhase:"Conservativa — secondo quadrante", lastVisit:"14/03/2026", nextVisit:"28/03/2026", progress:35, totalMonths:6,
+      disciplines:[ {id:1,name:"Diagnostica",status:"completata",start:"Feb 2026",end:"Feb 2026",sessions:"1/1",notes:""}, {id:2,name:"Endodonzia",status:"completata",start:"Feb 2026",end:"Mar 2026",sessions:"2/2",notes:""}, {id:3,name:"Conservativa",status:"in-corso",start:"Feb 2026",end:"Giu 2026",sessions:"2/6",notes:""}, {id:4,name:"Igiene",status:"in-corso",start:"Feb 2026",end:"Ongoing",sessions:"1/∞",notes:"Ogni 2 mesi"} ],
+      alerts:[], gdpr:{...defaultGdpr("10/02/2026"),consensoSanitario:{granted:true,date:"10/02/2026",method:"firma_modulo"}},
+      auditLog:[{id:1,ts:"10/02/2026 09:00",azione:"Apertura percorso",dettaglio:"Piano accettato",operatore:"Segreteria"}] },
+  ];
+}
+const SEED = makeSeed();
+
+const inputStyle = { width:"100%", padding:"7px 9px", fontSize:12, border:"1px solid #e2e8f0", borderRadius:6, outline:"none", fontFamily:"inherit", background:"#fff", color:"#0f172a", boxSizing:"border-box" };
+const labelStyle = { display:"block", fontSize:10, fontWeight:600, color:"#475569", marginBottom:3, textTransform:"uppercase", letterSpacing:"0.06em" };
+
+// ─── CHAT PANEL ───────────────────────────────────────────────────────────────
+function ChatPanel({ patients, currentPatient }) {
+  const [msgs, setMsgs] = useState([{ role:"assistant", content:"Ciao! Sono l'assistente di Innova Clinique.\n\nPosso aiutarti con il cruscotto, la timeline, il GDPR e i protocolli clinici.\n\nCosa ti serve?", ts:getTodayFull() }]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+  const inputRef  = useRef(null);
+
+  useEffect(() => { setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 100); }, []);
+  useEffect(() => { if (bottomRef.current) bottomRef.current.scrollIntoView({ behavior:"smooth" }); }, [msgs, loading]);
+
+  function buildContext() {
+    const pts = patients || [];
+    let ctx = `\n\n[CONTESTO] Pazienti:${pts.length} Critici:${pts.filter(p => p.status === "rosso").length} Alert:${pts.reduce((s,p) => s + (p.alerts||[]).filter(a => a.open).length, 0)}`;
+    if (currentPatient) {
+      const p = currentPatient;
+      ctx += `\nPAZIENTE: ${p.name} [${p.status}] ${p.currentPhase}`;
+      ctx += `\nDisc: ${(p.disciplines||[]).map(d => `${d.name}[${d.status}]`).join(',')}`;
+      const oa = (p.alerts||[]).filter(a => a.open);
+      ctx += `\nAlert: ${oa.map(a => `[${a.level}]${a.text}`).join(' | ') || 'nessuno'}`;
+    }
+    return ctx;
+  }
+
+  async function send(text) {
+    const q = (text || input).trim(); if (!q || loading) return;
+    setInput("");
+    const userMsg = { role:"user", content:q, ts:getTodayFull() };
+    const newMsgs = [...msgs, userMsg]; setMsgs(newMsgs); setLoading(true);
+    try {
+      const apiMsgs = newMsgs.slice(-10).map((m, i) => ({ role:m.role, content: i === newMsgs.length - 1 && m.role === "user" ? m.content + buildContext() : m.content }));
+      const res = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", headers:{"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:500, system:SYSTEM_PROMPT, messages:apiMsgs }) });
+      const data = await res.json();
+      const reply = data.content ? data.content.filter(b => b.type === "text").map(b => b.text).join("") : "Errore nella risposta.";
+      setMsgs(prev => [...prev, { role:"assistant", content:reply, ts:getTodayFull() }]);
+    } catch (e) { setMsgs(prev => [...prev, { role:"assistant", content:"Errore di connessione.", ts:getTodayFull() }]); }
+    setLoading(false);
+  }
+
+  function renderMsgContent(text) {
+    return text.split('\n').map((line, i) => {
+      if (!line.trim()) return <div key={i} style={{ height:4 }} />;
+      if (line.startsWith("- ") || line.startsWith("• ")) return <div key={i} style={{ display:"flex", gap:5, marginBottom:3 }}><span style={{ color:"#7c3aed", flexShrink:0, fontWeight:700 }}>›</span><span style={{ fontSize:12, lineHeight:1.5 }}>{line.substring(2)}</span></div>;
+      return <div key={i} style={{ fontSize:12, lineHeight:1.5, marginBottom:2 }}>{line}</div>;
+    });
+  }
+
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
+    <React.Fragment>
+      <div style={{ background:"linear-gradient(135deg,#7c3aed,#4f46e5)", padding:"10px 13px", flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <div style={{ width:28, height:28, borderRadius:"50%", background:"rgba(255,255,255,0.2)", display:"flex", alignItems:"center", justifyContent:"center" }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:"#fff" }}>Assistente</div>
+            <div style={{ fontSize:9, color:"rgba(255,255,255,0.75)", display:"flex", alignItems:"center", gap:3 }}><span style={{ width:5, height:5, borderRadius:"50%", background:"#4ade80", display:"inline-block" }}/>Online</div>
+          </div>
+        </div>
+      </div>
+      {currentPatient && <div style={{ padding:"5px 11px", background:"#f0fdf4", borderBottom:"1px solid #bbf7d0", fontSize:10, color:"#15803d", flexShrink:0 }}><b>{currentPatient.name}</b> — contesto attivo</div>}
+      <div style={{ flex:1, overflowY:"auto", padding:"10px 11px", display:"flex", flexDirection:"column", gap:8, minHeight:0 }}>
+        {msgs.map((m, i) => (
+          <div key={i} style={{ display:"flex", flexDirection:"column", alignItems: m.role === "user" ? "flex-end" : "flex-start" }}>
+            <div style={{ maxWidth:"90%", padding:"8px 11px", borderRadius: m.role === "user" ? "12px 12px 3px 12px" : "12px 12px 12px 3px", background: m.role === "user" ? "linear-gradient(135deg,#7c3aed,#4f46e5)" : "#f8fafc", color: m.role === "user" ? "#fff" : "#0f172a", border: m.role === "assistant" ? "1px solid #e2e8f0" : "none" }}>
+              {m.role === "user" ? <div style={{ fontSize:12, lineHeight:1.5 }}>{m.content}</div> : renderMsgContent(m.content)}
+            </div>
+            <div style={{ fontSize:9, color:"#94a3b8", marginTop:2, paddingLeft: m.role === "user" ? 0 : 3, paddingRight: m.role === "user" ? 3 : 0 }}>{m.ts}</div>
+          </div>
+        ))}
+        {loading && <div style={{ display:"flex" }}><div style={{ background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:"12px 12px 12px 3px", padding:"10px 14px", display:"flex", gap:4 }}>{[0,1,2].map(i => <div key={i} style={{ width:6, height:6, borderRadius:"50%", background:"#7c3aed", animation:`chatbounce 1.2s ${i*0.2}s ease-in-out infinite` }}/>)}</div></div>}
+        <div ref={bottomRef} />
+      </div>
+      <div style={{ padding:"5px 10px", borderTop:"1px solid #f1f5f9", display:"flex", flexDirection:"column", gap:3, flexShrink:0 }}>
+        {msgs.length <= 2 && <div style={{ fontSize:9, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:2 }}>Domande frequenti</div>}
+        {(msgs.length <= 2 ? SUGGESTED.slice(0,3) : SUGGESTED.slice(0,2)).map(q => <button key={q} onClick={() => send(q)} style={{ padding:"4px 8px", border:"1px solid #e2e8f0", borderRadius:7, background:"#fafbfc", color:"#374151", fontSize:10, cursor:"pointer", fontFamily:"inherit", textAlign:"left" }}>{q.length > 30 ? q.slice(0,29) + "…" : q}</button>)}
+      </div>
+      <div style={{ padding:"8px 10px", borderTop:"1px solid #e2e8f0", display:"flex", gap:6, alignItems:"flex-end", flexShrink:0 }}>
+        <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Scrivi… (Invio per inviare)" rows={1}
+          style={{ flex:1, padding:"7px 9px", fontSize:12, border:"1px solid #e2e8f0", borderRadius:8, outline:"none", fontFamily:"inherit", resize:"none", color:"#0f172a", lineHeight:1.4, maxHeight:60, overflowY:"auto", boxSizing:"border-box" }}
+          onFocus={e => { e.target.style.borderColor = "#7c3aed"; }} onBlur={e => { e.target.style.borderColor = "#e2e8f0"; }}
+          onInput={e => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 60) + "px"; }}/>
+        <button onClick={() => send()} disabled={!input.trim() || loading} style={{ width:32, height:32, borderRadius:8, background: input.trim() && !loading ? "linear-gradient(135deg,#7c3aed,#4f46e5)" : "#e2e8f0", border:"none", cursor: input.trim() && !loading ? "pointer" : "default", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={input.trim() && !loading ? "#fff" : "#94a3b8"} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+      <style>{`@keyframes chatbounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-5px)}}`}</style>
+    </React.Fragment>
+  );
+}
+
+// ─── TIMELINE ─────────────────────────────────────────────────────────────────
+function Timeline({ patient }) {
+  const containerRef = useRef(null); const [W, setW] = useState(500); const [tooltip, setTooltip] = useState(null);
+  useEffect(() => { if (!containerRef.current) return; const ro = new ResizeObserver(entries => { for (const e of entries) setW(e.contentRect.width); }); ro.observe(containerRef.current); setW(containerRef.current.offsetWidth || 500); return () => ro.disconnect(); }, []);
+  const disciplines = patient.disciplines || []; if (!disciplines.length) return <div style={{ padding:28, textAlign:"center", color:"#94a3b8", fontSize:12 }}>Nessuna disciplina.</div>;
+  const td = new Date(); let minD = null, maxD = null;
+  disciplines.forEach(d => { const s = parseMonthYear(d.start), e = parseMonthYear(d.end); if (s && (!minD || s < minD)) minD = s; if (e && (!maxD || e > maxD)) maxD = e; });
+  if (!minD) minD = addMonths(td, -1); if (!maxD || maxD < td) maxD = addMonths(td, 6);
+  minD = addMonths(minD, -1); maxD = addMonths(maxD, 2);
+  const TM = Math.max(monthDiff(minD, maxD), 3), LW = 132, BW = 78, CW = Math.max(W - LW - BW - 4, 120), RH = 34, HH = 28, FH = 20, TH = 14, H = HH + disciplines.length * RH + FH;
+  function toX(d) { return LW + (monthDiff(minD, d) / TM) * CW; }
+  const tdX = toX(td); const gridMonths = []; let cur = new Date(minD); while (cur <= maxD) { gridMonths.push(new Date(cur)); cur = addMonths(cur, 1); }
+  const labelEvery = CW < 180 ? 4 : CW < 320 ? 3 : CW < 480 ? 2 : 1;
+  return (
+    <div ref={containerRef} style={{ background:"#fff", borderRadius:9, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+      <div style={{ padding:"7px 12px", borderBottom:"1px solid #f1f5f9", display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+        {[{c:"#10b981",l:"Completata"},{c:"#3b82f6",l:"Nei tempi"},{c:"#f59e0b",l:"Ritardo lieve"},{c:"#ef4444",l:"Critica"},{c:"#94a3b8",l:"Non iniziata"}].map(x => <span key={x.l} style={{ display:"flex", alignItems:"center", gap:3, fontSize:10, color:"#475569" }}><span style={{ width:9, height:9, borderRadius:2, background:x.c, display:"inline-block" }}/>{x.l}</span>)}
+        <span style={{ marginLeft:"auto", fontSize:9, color:"#94a3b8" }}>Linea blu = oggi</span>
+      </div>
+      <div style={{ overflowX:"auto" }}>
+        <svg width={Math.max(W, LW + 120)} height={H} style={{ display:"block" }}>
+          <rect x={LW} y={0} width={CW} height={H} fill="#fafbfc"/>
+          {gridMonths.map((m, i) => { const x = toX(m); return <g key={i}><line x1={x} y1={HH} x2={x} y2={H-FH} stroke="#f1f5f9" strokeWidth={1}/>{i % labelEvery === 0 && <text x={x+2} y={HH-5} fontSize={7} fill="#94a3b8" fontFamily="system-ui">{fmtMonthYear(m)}</text>}</g>; })}
+          {disciplines.map((_, i) => <line key={i} x1={0} y1={HH + i*RH} x2={LW+CW+BW} y2={HH + i*RH} stroke="#f1f5f9" strokeWidth={1}/>)}
+          {tdX >= LW && tdX <= LW+CW && <g><line x1={tdX} y1={HH-2} x2={tdX} y2={H-FH} stroke="#2563eb" strokeWidth={1.5} strokeDasharray="4 3"/><rect x={tdX-12} y={HH-14} width={24} height={11} rx={2} fill="#2563eb"/><text x={tdX} y={HH-4} fontSize={7} fill="#fff" textAnchor="middle" fontFamily="system-ui" fontWeight="700">OGGI</text></g>}
+          {disciplines.map((d, i) => {
+            const y0 = HH + i * RH, ty = y0 + (RH - TH) / 2, col = timelineColor(d, td);
+            const sD = parseMonthYear(d.start), eD = d.end && d.end.toLowerCase() === "ongoing" ? addMonths(maxD, -1) : parseMonthYear(d.end), prog = sessionProgress(d.sessions);
+            let x1 = sD ? toX(sD) : LW, x2 = eD ? toX(addMonths(eD, 1)) : LW + CW; x1 = Math.max(x1, LW); x2 = Math.min(x2, LW + CW);
+            const bw = Math.max(x2 - x1, 3), pw = prog !== null ? bw * prog : (d.status === "completata" ? bw : 0);
+            return <g key={d.id || i} onMouseEnter={e => setTooltip({ name:d.name, label:col.label, x:e.clientX, y:e.clientY })} onMouseLeave={() => setTooltip(null)} style={{ cursor:"pointer" }}>
+              <rect x={0} y={y0} width={LW+CW+BW} height={RH} fill="transparent"/>
+              <text x={LW-5} y={y0+RH/2+1} fontSize={10} fill="#374151" textAnchor="end" dominantBaseline="central" fontFamily="system-ui" fontWeight={d.status === "in-corso" ? "600" : "400"}>{d.name.length > 16 ? d.name.slice(0,15) + "…" : d.name}</text>
+              <rect x={LW} y={ty} width={CW} height={TH} rx={3} fill="#f1f5f9"/>
+              {sD && <rect x={x1} y={ty} width={bw} height={TH} rx={3} fill={col.bar} opacity={0.18}/>}
+              {pw > 0 && <rect x={x1} y={ty} width={Math.max(pw, 3)} height={TH} rx={3} fill={col.bar} opacity={0.85}/>}
+              {d.status === "completata" && prog === null && <rect x={x1} y={ty} width={bw} height={TH} rx={3} fill={col.bar} opacity={0.85}/>}
+              {d.end && d.end.toLowerCase() === "ongoing" && d.status !== "non-iniziata" && <line x1={LW+CW-2} y1={ty+2} x2={LW+CW-2} y2={ty+TH-2} stroke={col.bar} strokeWidth={1.5} strokeDasharray="2 2"/>}
+              <rect x={LW+CW+2} y={y0+RH/2-7} width={74} height={14} rx={7} fill={col.bar} opacity={0.12}/>
+              <text x={LW+CW+39} y={y0+RH/2+1} fontSize={8} fill={col.bar} textAnchor="middle" dominantBaseline="central" fontFamily="system-ui" fontWeight="700">{col.label.toUpperCase()}</text>
+              {d.sessions && d.sessions !== "—" && bw > 30 && <text x={x1+bw/2} y={ty+TH/2+1} fontSize={8} fill={prog !== null && prog > 0.3 ? "#fff" : "#374151"} textAnchor="middle" dominantBaseline="central" fontFamily="system-ui" fontWeight="600">{d.sessions}</text>}
+            </g>;
+          })}
+          <line x1={LW} y1={H-FH} x2={LW+CW} y2={H-FH} stroke="#e2e8f0" strokeWidth={1}/>
+          {gridMonths.map((m, i) => { if (i % labelEvery !== 0) return null; return <text key={i} x={toX(m)+2} y={H-FH+10} fontSize={7} fill="#94a3b8" fontFamily="system-ui">{fmtMonthYear(m)}</text>; })}
+        </svg>
+      </div>
+      <div style={{ padding:"7px 12px", borderTop:"1px solid #f1f5f9", display:"flex", gap:4, flexWrap:"wrap" }}>
+        <span style={{ fontSize:10, color:"#64748b", marginRight:3 }}>Compliance:</span>
+        {disciplines.map(d => { const col = timelineColor(d, new Date()); return <div key={d.id || d.name} style={{ display:"flex", alignItems:"center", gap:3, padding:"2px 6px", borderRadius:9, background:col.bar+"18", border:`1px solid ${col.bar}33` }}><span style={{ width:6, height:6, borderRadius:"50%", background:col.bar, display:"inline-block" }}/><span style={{ fontSize:9, fontWeight:700, color:col.bar }}>{d.name.length > 12 ? d.name.slice(0,11) + "…" : d.name}</span></div>; })}
+      </div>
+      {tooltip && <div style={{ position:"fixed", background:"#0f172a", color:"#f1f5f9", fontSize:11, padding:"5px 9px", borderRadius:5, pointerEvents:"none", zIndex:9999, left:tooltip.x+12, top:tooltip.y-8, boxShadow:"0 4px 16px rgba(0,0,0,0.4)" }}><b style={{ color:"#93c5fd" }}>{tooltip.name}</b> — {tooltip.label}</div>}
     </div>
   );
 }
 
-export default App;
+// ─── MODAL ────────────────────────────────────────────────────────────────────
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div onClick={e => { if (e.target === e.currentTarget) onClose(); }} style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:999, padding:14 }}>
+      <div style={{ background:"#fff", borderRadius:10, width: wide ? 640 : 440, maxHeight:"88vh", overflowY:"auto", boxShadow:"0 24px 64px rgba(0,0,0,0.35)" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"14px 18px", borderBottom:"1px solid #e2e8f0", position:"sticky", top:0, background:"#fff", zIndex:1 }}>
+          <span style={{ fontWeight:700, fontSize:13, color:"#0f172a" }}>{title}</span>
+          <button onClick={onClose} style={{ background:"none", border:"none", fontSize:17, cursor:"pointer", color:"#94a3b8" }}>✕</button>
+        </div>
+        <div style={{ padding:"16px 18px" }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── PATIENT FORM ─────────────────────────────────────────────────────────────
+function PatientForm({ initial, onSave, onClose, onDelete }) {
+  const isNew = !initial;
+  const blank = { name:"", age:"", phone:"", acceptedDate:"", clinician:CLINICIANS[0], planValue:"", invoiced:"0", lastVisit:"", nextVisit:"", totalMonths:"12", tags:"", currentPhase:"" };
+  const [f, setF] = useState(initial ? { ...initial, tags:initial.tags.join(", "), planValue:String(initial.planValue), invoiced:String(initial.invoiced), totalMonths:String(initial.totalMonths) } : blank);
+  const [err, setErr] = useState({});
+  function set(k, v) { setF(p => ({ ...p, [k]:v })); }
+  function validate() { const e = {}; if (!f.name.trim()) e.name = "Obbligatorio"; if (!f.age || isNaN(+f.age)) e.age = "Non valida"; if (!f.acceptedDate.trim()) e.acceptedDate = "Obbligatoria"; if (!f.planValue || isNaN(+f.planValue)) e.planValue = "Non valido"; setErr(e); return Object.keys(e).length === 0; }
+  function submit() {
+    if (!validate()) return;
+    const base = isNew ? { id:"", disciplines:[], alerts:[], progress:0, status:"verde", gdpr:defaultGdpr(f.acceptedDate.trim() || getToday()), auditLog:[] } : initial;
+    const saved = { ...base, name:f.name.trim(), age:+f.age, phone:f.phone.trim(), acceptedDate:f.acceptedDate.trim(), clinician:f.clinician, planValue:+f.planValue, invoiced:+f.invoiced||0, lastVisit:f.lastVisit.trim(), nextVisit:f.nextVisit.trim()||"Non fissata", totalMonths:+f.totalMonths||12, tags:f.tags.split(",").map(t => t.trim()).filter(Boolean), currentPhase:f.currentPhase.trim()||"Percorso in apertura" };
+    if (!isNew) saved.status = calcStatus(saved.disciplines, saved.alerts); else saved.auditLog = [makeAuditEntry("Creazione", saved.name)];
+    onSave(saved);
+  }
+  function field(k, label, type, options) {
+    return <div><label style={labelStyle}>{label}</label>{options ? <select value={f[k]} onChange={e => set(k, e.target.value)} style={inputStyle}>{options.map(o => <option key={o}>{o}</option>)}</select> : <input type={type||"text"} value={f[k]} onChange={e => set(k, e.target.value)} style={{ ...inputStyle, borderColor:err[k]?"#ef4444":"#e2e8f0" }}/>}{err[k] && <div style={{ fontSize:10, color:"#ef4444", marginTop:2 }}>{err[k]}</div>}</div>;
+  }
+  const r2 = { display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 };
+  return <div><div style={{ display:"flex", flexDirection:"column", gap:10 }}>{field("name","Nome e Cognome")}<div style={r2}>{field("age","Età","number")}{field("phone","Telefono")}</div><div style={r2}>{field("acceptedDate","Data accettazione")}{field("clinician","Clinico",null,CLINICIANS)}</div><div style={r2}>{field("planValue","Valore piano €","number")}{field("invoiced","Già fatturato €","number")}</div><div style={r2}>{field("lastVisit","Ultima visita")}{field("nextVisit","Prossima visita")}</div><div style={r2}>{field("totalMonths","Durata (mesi)","number")}{field("tags","Tag (virgola)")}</div>{field("currentPhase","Fase attuale")}</div><div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:16, paddingTop:12, borderTop:"1px solid #e2e8f0" }}>{(!isNew&&onDelete)?<button onClick={onDelete} style={{ padding:"5px 10px", border:"1px solid #fca5a5", borderRadius:5, background:"#fef2f2", color:"#dc2626", cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>🗑 Elimina</button>:<span/>}<div style={{ display:"flex", gap:8 }}><button onClick={onClose} style={{ padding:"6px 14px", border:"1px solid #e2e8f0", borderRadius:5, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:12 }}>Annulla</button><button onClick={submit} style={{ padding:"6px 14px", border:"none", borderRadius:5, background:"#1e40af", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>{isNew?"Crea":"Salva"}</button></div></div></div>;
+}
+
+function DisciplineForm({ initial, onSave, onClose }) {
+  const [f, setF] = useState(initial || { name:DISC_OPTIONS[0], status:"non-iniziata", start:"", end:"", sessions:"", notes:"" });
+  function set(k, v) { setF(p => ({ ...p, [k]:v })); }
+  return <div><div style={{ background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:5, padding:"6px 10px", marginBottom:10, fontSize:11, color:"#1e40af" }}>Date: "Mar 2026" · Fine continua: "Ongoing"</div><div style={{ display:"flex", flexDirection:"column", gap:10 }}><div><label style={labelStyle}>Disciplina</label><select value={f.name} onChange={e => set("name",e.target.value)} style={inputStyle}>{DISC_OPTIONS.map(o => <option key={o}>{o}</option>)}</select></div><div><label style={labelStyle}>Stato</label><select value={f.status} onChange={e => set("status",e.target.value)} style={inputStyle}>{Object.entries(DISC_STATUS).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}</select></div><div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}><div><label style={labelStyle}>Inizio</label><input value={f.start} onChange={e => set("start",e.target.value)} style={inputStyle} placeholder="Mar 2026"/></div><div><label style={labelStyle}>Fine</label><input value={f.end} onChange={e => set("end",e.target.value)} style={inputStyle} placeholder="Giu 2026 / Ongoing"/></div></div><div><label style={labelStyle}>Sedute (2/6 · 0/∞)</label><input value={f.sessions} onChange={e => set("sessions",e.target.value)} style={inputStyle}/></div><div><label style={labelStyle}>Note</label><textarea value={f.notes} onChange={e => set("notes",e.target.value)} style={{ ...inputStyle, minHeight:55, resize:"vertical" }}/></div></div><div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:16, paddingTop:12, borderTop:"1px solid #e2e8f0" }}><button onClick={onClose} style={{ padding:"6px 14px", border:"1px solid #e2e8f0", borderRadius:5, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:12 }}>Annulla</button><button onClick={() => { if (f.name) onSave({ ...f, id:initial?initial.id:Date.now() }); }} style={{ padding:"6px 14px", border:"none", borderRadius:5, background:"#1e40af", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>{initial?"Salva":"Aggiungi"}</button></div></div>;
+}
+
+function AlertForm({ onSave, onClose }) {
+  const [f, setF] = useState({ level:"arancio", text:"", due:"" });
+  function set(k, v) { setF(p => ({ ...p, [k]:v })); }
+  return <div><div style={{ display:"flex", flexDirection:"column", gap:10 }}><div><label style={labelStyle}>Livello</label><select value={f.level} onChange={e => set("level",e.target.value)} style={inputStyle}><option value="rosso">🔴 Rosso — entro 24h</option><option value="arancio">🟠 Arancio — entro 3 giorni</option><option value="giallo">🟡 Giallo — entro 7 giorni</option></select></div><div><label style={labelStyle}>Descrizione</label><textarea value={f.text} onChange={e => set("text",e.target.value)} style={{ ...inputStyle, minHeight:55, resize:"vertical" }}/></div><div><label style={labelStyle}>Scadenza</label><input value={f.due} onChange={e => set("due",e.target.value)} style={inputStyle} placeholder="dd/mm/yyyy o URGENTE"/></div></div><div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:16, paddingTop:12, borderTop:"1px solid #e2e8f0" }}><button onClick={onClose} style={{ padding:"6px 14px", border:"1px solid #e2e8f0", borderRadius:5, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:12 }}>Annulla</button><button onClick={() => { if (f.text.trim()) onSave({ ...f, id:Date.now(), open:true }); }} style={{ padding:"6px 14px", border:"none", borderRadius:5, background:"#dc2626", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Aggiungi</button></div></div>;
+}
+
+function GDPRTab({ patient, onUpdate }) {
+  const g = patient.gdpr || defaultGdpr(patient.acceptedDate);
+  function updateConsent(key, field, value) { const cur = g[key]||{granted:false,date:null,method:"firma_modulo"}; const cons = CONSENTS.find(c => c.key===key); const entry = makeAuditEntry(value?"Consenso concesso":"Consenso revocato", cons?cons.label:key); onUpdate({ ...patient, gdpr:{ ...g, [key]:{ ...cur, [field]:value } }, auditLog:[...(patient.auditLog||[]), entry] }); }
+  function exportData() { const obj={tipo:"Export GDPR Art.20",paziente:patient.id,nome:patient.name,gdpr:g}; const b=new Blob([JSON.stringify(obj,null,2)],{type:"application/json"}); const u=URL.createObjectURL(b); const a=document.createElement("a"); a.href=u; a.download=`${patient.id}_gdpr.json`; a.click(); URL.revokeObjectURL(u); }
+  return <div>{!g.consensoSanitario.granted&&<div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:7, padding:"8px 12px", marginBottom:11, fontSize:11, color:"#991b1b" }}><b>⚠ Consenso sanitario mancante</b></div>}<div style={{ background:"#fff", borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", marginBottom:11 }}><table style={{ width:"100%", borderCollapse:"collapse" }}><thead><tr style={{ background:"#f8fafc" }}>{["Finalità","Req.","Stato","Data"].map(h => <th key={h} style={{ padding:"7px 10px", textAlign:"left", fontSize:9, fontWeight:600, color:"#475569", textTransform:"uppercase", letterSpacing:"0.05em", borderBottom:"1px solid #e2e8f0" }}>{h}</th>)}</tr></thead><tbody>{CONSENTS.map((c,i) => { const con=g[c.key]||{granted:false,date:"",method:"firma_modulo"}; return <tr key={c.key} style={{ borderBottom:"1px solid #f1f5f9", background:i%2===0?"#fff":"#fafbfc" }}><td style={{ padding:"8px 10px" }}><div style={{ fontSize:11, fontWeight:500, color:"#0f172a" }}>{c.label}</div><div style={{ fontSize:9, color:"#94a3b8" }}>{c.legal}</div></td><td style={{ padding:"8px 10px" }}><span style={{ padding:"1px 5px", borderRadius:6, fontSize:9, fontWeight:600, background:c.required?"#fef2f2":"#f1f5f9", color:c.required?"#dc2626":"#64748b" }}>{c.required?"Sì":"No"}</span></td><td style={{ padding:"8px 10px" }}><button onClick={() => updateConsent(c.key,"granted",!con.granted)} style={{ padding:"2px 8px", border:"none", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"inherit", background:con.granted?"#d1fae5":"#fee2e2", color:con.granted?"#065f46":"#991b1b" }}>{con.granted?"✓ Sì":"✗ No"}</button></td><td style={{ padding:"8px 10px" }}><input value={con.date||""} onChange={e => updateConsent(c.key,"date",e.target.value)} style={{ ...inputStyle, width:88, padding:"3px 6px", fontSize:10 }} placeholder="dd/mm/yyyy"/></td></tr>; })}</tbody></table></div><div style={{ display:"flex", gap:6, marginBottom:11, flexWrap:"wrap" }}><button onClick={exportData} style={{ padding:"5px 10px", border:"1px solid #bfdbfe", borderRadius:5, background:"#eff6ff", color:"#1e40af", cursor:"pointer", fontSize:11, fontFamily:"inherit", fontWeight:600 }}>↓ Export Art. 20</button><button onClick={() => window.alert("Cancellazione limitata: obbligo conservazione 10 anni D.Lgs.229/1999")} style={{ padding:"5px 10px", border:"1px solid #fca5a5", borderRadius:5, background:"#fef2f2", color:"#dc2626", cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>🗑 Art. 17*</button><span style={{ fontSize:10, color:"#94a3b8", alignSelf:"center" }}>Conservazione: {g.scadenzaRetenzione}</span></div><div style={{ background:"#fff", borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}><div style={{ padding:"9px 13px", borderBottom:"1px solid #e2e8f0", background:"#f8fafc", display:"flex", justifyContent:"space-between" }}><span style={{ fontSize:12, fontWeight:600, color:"#0f172a" }}>Audit trail</span><span style={{ fontSize:10, color:"#94a3b8" }}>{(patient.auditLog||[]).length} operazioni</span></div><div style={{ maxHeight:160, overflowY:"auto" }}>{(patient.auditLog||[]).slice().reverse().map((e,i) => <div key={e.id||i} style={{ padding:"7px 13px", borderBottom:"1px solid #f1f5f9", display:"flex", gap:10 }}><span style={{ fontSize:9, color:"#94a3b8", fontFamily:"monospace", whiteSpace:"nowrap", minWidth:108 }}>{e.ts}</span><div><div style={{ fontSize:11, fontWeight:600, color:"#0f172a" }}>{e.azione}</div>{e.dettaglio&&<div style={{ fontSize:10, color:"#64748b", marginTop:1 }}>{e.dettaglio}</div>}</div></div>)}{!(patient.auditLog||[]).length&&<div style={{ padding:16, textAlign:"center", color:"#94a3b8", fontSize:11 }}>Nessuna operazione</div>}</div></div></div>;
+}
+
+function PrivacyBanner({ onAccept }) {
+  return <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.92)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:999, padding:14 }}><div style={{ background:"#fff", borderRadius:10, maxWidth:520, width:"100%", overflow:"hidden", maxHeight:"88vh", overflowY:"auto" }}><div style={{ background:"#1e40af", padding:"14px 20px" }}><div style={{ fontSize:9, color:"#93c5fd", textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:2 }}>Innova Clinique · Domodossola</div><div style={{ fontSize:14, color:"#fff", fontWeight:700 }}>Informativa trattamento dati personali</div><div style={{ fontSize:9, color:"#bfdbfe", marginTop:2 }}>Art. 13 GDPR 679/2016 · D.Lgs. 196/2003</div></div><div style={{ padding:"14px 20px", display:"flex", flexDirection:"column", gap:8 }}>{[["Titolare","Innova Clinique S.r.l. · Domodossola (VCO)"],["Finalità","Gestione clinica (Art.9 lett.h) · Contratto (Art.6 lett.b) · Obblighi legali (Art.6 lett.c) · Consenso (Art.6 lett.a)"],["Conservazione","Cartella clinica: 10 anni (D.Lgs.229/1999)"],["Diritti","Art.15 Accesso · Art.16 Rettifica · Art.17 Cancellazione* · Art.20 Portabilità · Art.21 Opposizione"]].map(([t,tx]) => <div key={t}><div style={{ fontSize:9, fontWeight:700, color:"#1e40af", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:1 }}>{t}</div><div style={{ fontSize:11, color:"#374151", lineHeight:1.5 }}>{tx}</div></div>)}</div><div style={{ padding:"12px 20px", borderTop:"1px solid #e2e8f0", background:"#f8fafc" }}><button onClick={onAccept} style={{ width:"100%", padding:"10px", background:"#1e40af", color:"#fff", border:"none", borderRadius:7, fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>Ho letto e confermo — Accedi</button></div></div></div>;
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [patients,   setPatients]   = useState([]);
+  const [sel,        setSel]        = useState(null);
+  const [view,       setView]       = useState("paziente");
+  const [tab,        setTab]        = useState("timeline");
+  const [aiText,     setAiText]     = useState({});
+  const [aiLoading,  setAiLoading]  = useState(false);
+  const [modal,      setModal]      = useState(null);
+  const [editDisc,   setEditDisc]   = useState(null);
+  const [stStatus,   setStStatus]   = useState("loading");
+  const [showBanner, setShowBanner] = useState(false);
+  const [chatOpen,   setChatOpen]   = useState(false);
+
+  useEffect(() => {
+    try {
+      const b = storage.get(BANNER_KEY);
+      if (!b) setShowBanner(true);
+      const p = storage.get(STORAGE_KEY);
+      if (p && p.value) {
+        const d = JSON.parse(p.value);
+        setPatients(d);
+        setSel(d.find(x => x.status === "rosso") || d[0] || null);
+      } else {
+        setPatients(SEED);
+        setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
+        storage.set(STORAGE_KEY, JSON.stringify(SEED));
+      }
+    } catch (e) {
+      setPatients(SEED);
+      setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
+    }
+    setStStatus("idle");
+  }, []);
+
+  const persist = useCallback(data => {
+    setStStatus("saving");
+    try { storage.set(STORAGE_KEY, JSON.stringify(data)); setStStatus("saved"); setTimeout(() => setStStatus("idle"), 2000); }
+    catch (e) { setStStatus("error"); }
+  }, []);
+
+  const commit = useCallback((list, ns) => { setPatients(list); if (ns !== undefined) setSel(ns); persist(list); }, [persist]);
+  const updateSel = useCallback(upd => { commit(patients.map(p => p.id === upd.id ? upd : p), upd); }, [patients, commit]);
+
+  function saveNewPatient(p)  { const id = makeNewId(patients); commit([...patients, {...p,id}], {...p,id}); setModal(null); }
+  function saveEditPatient(p) { updateSel({...p, auditLog:[...(p.auditLog||[]), makeAuditEntry("Modifica dati","Aggiornato")]}); setModal(null); }
+  function deletePatient()    { if (!window.confirm(`Eliminare ${sel.name}?`)) return; const r = patients.filter(p => p.id !== sel.id); commit(r, r[0]||null); setModal(null); }
+  function saveNewDisc(d)     { const up={...sel,disciplines:[...(sel.disciplines||[]),d],auditLog:[...(sel.auditLog||[]),makeAuditEntry("Disciplina aggiunta",d.name)]}; up.status=calcStatus(up.disciplines,up.alerts); updateSel(up); setModal(null); }
+  function saveEditDisc(d)    { const up={...sel,disciplines:(sel.disciplines||[]).map(x=>x.id===d.id?d:x),auditLog:[...(sel.auditLog||[]),makeAuditEntry("Disciplina modificata",d.name)]}; up.status=calcStatus(up.disciplines,up.alerts); updateSel(up); setModal(null); setEditDisc(null); }
+  function deleteDisc(dId)    { const d=(sel.disciplines||[]).find(x=>x.id===dId); const up={...sel,disciplines:(sel.disciplines||[]).filter(x=>x.id!==dId),auditLog:[...(sel.auditLog||[]),makeAuditEntry("Disciplina eliminata",d?d.name:"")]}; up.status=calcStatus(up.disciplines,up.alerts); updateSel(up); }
+  function saveNewAlert(a)    { const up={...sel,alerts:[...(sel.alerts||[]),a],auditLog:[...(sel.auditLog||[]),makeAuditEntry(`Alert ${a.level}`,a.text)]}; up.status=calcStatus(up.disciplines,up.alerts); updateSel(up); setModal(null); }
+  function closeAlert(aId)    { const a=(sel.alerts||[]).find(x=>x.id===aId); const up={...sel,alerts:(sel.alerts||[]).map(x=>x.id===aId?{...x,open:false}:x),auditLog:[...(sel.auditLog||[]),makeAuditEntry("Alert chiuso",a?a.text:"")]}; up.status=calcStatus(up.disciplines,up.alerts); updateSel(up); }
+
+  function resetStorage() {
+    if (!window.confirm("Ripristinare dati demo?")) return;
+    storage.delete(STORAGE_KEY);
+    commit(SEED, SEED.find(x => x.status === "rosso") || SEED[0]);
+    setAiText({});
+  }
+
+  async function runAI(patient) {
+    const p = patient || sel; setTab("analisi"); if (aiText[p.id]) return; setAiLoading(true);
+    const sum = `Paziente: ${p.name}, ${p.age}a\nFase: ${p.currentPhase}\nDisc: ${(p.disciplines||[]).map(d=>`${d.name}[${d.status}] ${d.sessions}`).join(', ')}\nAlert: ${(p.alerts||[]).filter(a=>a.open).map(a=>`[${a.level}] ${a.text}`).join(' | ')||'nessuno'}`;
+    try {
+      const r = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", headers:{"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:700, system:"Consulente operativo odontoiatrico (Innova Clinique, Domodossola). 4 sezioni bold:\n**Stato generale:**\n**Rischi 4 settimane:**\n**Azioni segreteria:**\n**Segnali lungo termine:**\nBullet '- '. Italiano. Max 220 parole.", messages:[{role:"user",content:sum}] }) });
+      const data = await r.json();
+      const txt = data.content ? data.content.filter(b=>b.type==="text").map(b=>b.text).join("") : "Errore.";
+      setAiText(prev => ({ ...prev, [p.id]:txt }));
+    } catch (e) { setAiText(prev => ({ ...prev, [p.id]:"Errore connessione." })); }
+    setAiLoading(false);
+  }
+
+  function renderAI(text) {
+    return text.split('\n').map((l, i) => {
+      if (/^\*\*(.+)\*\*$/.test(l)) return <div key={i} style={{ fontWeight:700, color:"#0f172a", marginTop:i>0?10:0, marginBottom:2, fontSize:12 }}>{l.replace(/\*\*/g,"")}</div>;
+      if (l.startsWith("- ") || l.startsWith("• ")) return <div key={i} style={{ display:"flex", gap:6, marginBottom:3, paddingLeft:2 }}><span style={{ color:"#3b82f6", flexShrink:0, fontWeight:700 }}>›</span><span style={{ color:"#334155", fontSize:12 }}>{l.substring(2)}</span></div>;
+      if (!l.trim()) return <div key={i} style={{ height:3 }}/>;
+      return <div key={i} style={{ color:"#334155", marginBottom:2, fontSize:12 }}>{l}</div>;
+    });
+  }
+
+  if (stStatus === "loading") return <div style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:"100vh", background:"#0f172a", flexDirection:"column", gap:12 }}><div style={{ width:22, height:22, border:"2px solid #1e293b", borderTopColor:"#60a5fa", borderRadius:"50%", animation:"spin 0.8s linear infinite" }}/><span style={{ color:"#475569", fontSize:12, fontFamily:"system-ui" }}>Caricamento…</span><style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style></div>;
+
+  const openAlerts = (sel ? sel.alerts||[] : []).filter(a => a.open);
+  const redAlerts  = openAlerts.filter(a => a.level === "rosso").length;
+  const totalRed   = patients.reduce((s,p) => s + (p.alerts||[]).filter(a=>a.open&&a.level==="rosso").length, 0);
+  const critPts    = patients.filter(p => p.status === "rosso").length;
+  const missCons   = patients.filter(p => !p.gdpr||!p.gdpr.consensoSanitario||!p.gdpr.consensoSanitario.granted).length;
+  const gdprBadge  = sel && (!sel.gdpr||!sel.gdpr.consensoSanitario||!sel.gdpr.consensoSanitario.granted);
+  const stLabel    = stStatus==="saving"?"Salvataggio…":stStatus==="saved"?"Salvato ✓":stStatus==="error"?"Errore":"";
+  const stColor    = stStatus==="saved"?"#10b981":stStatus==="error"?"#ef4444":"#475569";
+
+  function ChatBtn({ label }) {
+    return <button onClick={() => setChatOpen(o => !o)} style={{ padding:"5px 10px", border:"1px solid", borderRadius:6, cursor:"pointer", fontSize:11, fontWeight:600, fontFamily:"inherit", background:chatOpen?"#7c3aed":"#fff", color:chatOpen?"#fff":"#7c3aed", borderColor:"#7c3aed", display:"inline-flex", alignItems:"center", gap:4 }}><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>{chatOpen?"Chiudi":(label||"Assistente")}</button>;
+  }
+
+  return (
+    <div style={{ display:"flex", flexDirection:"row", fontFamily:"'DM Sans',system-ui,sans-serif", background:"#0f172a", minHeight:"100vh" }}>
+      {showBanner && <PrivacyBanner onAccept={() => { setShowBanner(false); storage.set(BANNER_KEY, "accepted"); }}/>}
+
+      {/* SIDEBAR */}
+      <div style={{ width:222, background:"#0f172a", borderRight:"1px solid #1e293b", flexShrink:0, display:"flex", flexDirection:"column", minHeight:"100vh" }}>
+        <div style={{ padding:"13px 13px 8px", borderBottom:"1px solid #1e293b" }}>
+          <div style={{ fontSize:10, fontWeight:700, color:"#60a5fa", letterSpacing:"0.1em", textTransform:"uppercase" }}>Innova Clinique</div>
+          <div style={{ fontSize:11, fontWeight:600, color:"#e2e8f0", marginTop:1 }}>Cruscotto 360°</div>
+          <div style={{ marginTop:3, display:"flex", justifyContent:"space-between", alignItems:"center" }}><span style={{ fontSize:9, color:stColor }}>{stLabel}</span><button onClick={resetStorage} style={{ background:"none", border:"none", fontSize:8, color:"#334155", cursor:"pointer", fontFamily:"inherit", padding:0 }}>reset</button></div>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", borderBottom:"1px solid #1e293b" }}>
+          {[{l:"Attivi",v:patients.length,c:"#e2e8f0"},{l:"🔴",v:critPts,c:"#ef4444"},{l:"Alert",v:totalRed,c:"#f59e0b"},{l:"GDPR",v:missCons,c:missCons>0?"#ef4444":"#10b981"}].map(s => <div key={s.l} style={{ padding:"7px 0", textAlign:"center", borderRight:"1px solid #1e293b" }}><div style={{ fontSize:13, fontWeight:700, color:s.c }}>{s.v}</div><div style={{ fontSize:7, color:"#475569", textTransform:"uppercase", letterSpacing:"0.04em" }}>{s.l}</div></div>)}
+        </div>
+        <div style={{ padding:"6px 8px", borderBottom:"1px solid #1e293b", display:"flex", flexDirection:"column", gap:4 }}>
+          {[["📊","Panoramica","panoramica"],["🔒","GDPR","gdpr-view"]].map(([ic,lab,vid]) => <button key={lab} onClick={() => setView(vid)} style={{ width:"100%", padding:"5px 8px", background:view===vid?"#0f4c81":"#1e293b", color:view===vid?"#93c5fd":"#94a3b8", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}><span style={{ fontSize:12 }}>{ic}</span>{lab}</button>)}
+          <button onClick={() => setModal("new-patient")} style={{ width:"100%", padding:"5px", background:"#1e40af", color:"#fff", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>+ Nuovo paziente</button>
+          <button onClick={() => setChatOpen(o => !o)} style={{ width:"100%", padding:"5px 8px", background:chatOpen?"#7c3aed":"#1e293b", color:chatOpen?"#fff":"#94a3b8", border:`1px solid ${chatOpen?"#7c3aed":"#334155"}`, borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            {chatOpen?"✕ Chiudi assistente":"💬 Assistente AI"}
+          </button>
+        </div>
+        <div style={{ overflowY:"auto", flex:1 }}>
+          <div style={{ padding:"6px 12px 3px", fontSize:8, color:"#334155", textTransform:"uppercase", letterSpacing:"0.1em", fontWeight:600 }}>Pazienti</div>
+          {patients.map(p => {
+            const s = SEM[p.status]; const isSel = sel&&sel.id===p.id&&view==="paziente"; const n=(p.alerts||[]).filter(a=>a.open).length; const noG=!p.gdpr||!p.gdpr.consensoSanitario||!p.gdpr.consensoSanitario.granted;
+            return <div key={p.id} onClick={() => { setSel(p); setView("paziente"); setTab("timeline"); }} style={{ padding:"8px 12px", cursor:"pointer", background:isSel?"#1e293b":"transparent", borderLeft:`3px solid ${isSel?s.color:"transparent"}` }}><div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}><span style={{ fontSize:11, fontWeight:isSel?600:400, color:isSel?"#f1f5f9":"#94a3b8" }}>{p.name}</span><div style={{ display:"flex", alignItems:"center", gap:3 }}>{noG&&<span style={{ fontSize:7, color:"#ef4444", fontWeight:700 }}>GDPR</span>}{n>0&&<div style={{ background:p.status==="rosso"?"#ef4444":"#f59e0b", color:"#fff", borderRadius:7, fontSize:8, fontWeight:700, padding:"0 4px" }}>{n}</div>}<div style={{ width:6, height:6, borderRadius:"50%", background:s.color }}/></div></div><div style={{ fontSize:9, color:"#475569", marginTop:1 }}>{p.currentPhase.length>27?p.currentPhase.slice(0,27)+"…":p.currentPhase}</div></div>;
+          })}
+        </div>
+      </div>
+
+      {/* CENTER */}
+      <div style={{ flex:1, display:"flex", flexDirection:"column", background:"#f8fafc", minWidth:0 }}>
+
+        {view==="panoramica" && <React.Fragment>
+          <div style={{ background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}><h1 style={{ margin:0, fontSize:15, fontWeight:700, color:"#0f172a" }}>Panoramica</h1><ChatBtn/></div>
+          <div style={{ overflowY:"auto", padding:14, flex:1 }}>
+            <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
+              {[["Attivi",patients.length,"#0f172a"],["Critici",critPts,critPts>0?"#ef4444":"#10b981"],["Alert 🔴",totalRed,totalRed>0?"#ef4444":"#10b981"],["Residuo €",`${((patients.reduce((s,p)=>s+p.planValue,0)-patients.reduce((s,p)=>s+p.invoiced,0))/1000).toFixed(0)}k`,"#0f172a"]].map(([lab,val,c]) => <div key={lab} style={{ background:"#fff", borderRadius:8, padding:"10px 14px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", flex:1 }}><div style={{ fontSize:9, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:2 }}>{lab}</div><div style={{ fontSize:17, fontWeight:700, color:c }}>{val}</div></div>)}
+            </div>
+            <div style={{ background:"#fff", borderRadius:9, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}><thead><tr style={{ background:"#f8fafc" }}>{["Stato","Paziente","Fase","Alert","Residuo","Prossimo",""].map(h => <th key={h} style={{ padding:"7px 10px", textAlign:"left", fontSize:9, fontWeight:600, color:"#475569", textTransform:"uppercase", letterSpacing:"0.04em", borderBottom:"1px solid #e2e8f0" }}>{h}</th>)}</tr></thead>
+              <tbody>{patients.slice().sort((a,b)=>({rosso:0,arancio:1,verde:2})[a.status]-({rosso:0,arancio:1,verde:2})[b.status]).map((p,i) => { const s=SEM[p.status]; const oA=(p.alerts||[]).filter(a=>a.open); const rA=oA.filter(a=>a.level==="rosso").length; return <tr key={p.id} style={{ borderBottom:"1px solid #f1f5f9", background:i%2===0?"#fff":"#fafbfc", cursor:"pointer" }} onClick={() => { setSel(p); setView("paziente"); setTab("timeline"); }}><td style={{ padding:"8px 10px" }}><div style={{ display:"flex", alignItems:"center", gap:4 }}><div style={{ width:7, height:7, borderRadius:"50%", background:s.color }}/><span style={{ fontSize:10, fontWeight:600, color:s.color }}>{s.label}</span></div></td><td style={{ padding:"8px 10px", fontSize:12, fontWeight:600, color:"#0f172a" }}>{p.name}</td><td style={{ padding:"8px 10px", fontSize:11, color:"#475569", maxWidth:110 }}><div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p.currentPhase}</div></td><td style={{ padding:"8px 10px" }}>{rA>0?<span style={{ padding:"1px 5px", borderRadius:5, fontSize:10, fontWeight:700, background:"#fee2e2", color:"#ef4444" }}>🔴{rA}</span>:oA.length>0?<span style={{ fontSize:10, color:"#f59e0b" }}>🟠{oA.length}</span>:<span style={{ fontSize:10, color:"#10b981" }}>✓</span>}</td><td style={{ padding:"8px 10px", fontSize:11, fontWeight:600, color:(p.planValue-p.invoiced)>5000?"#dc2626":"#0f172a" }}>€{(p.planValue-p.invoiced).toLocaleString()}</td><td style={{ padding:"8px 10px", fontSize:11, color:p.nextVisit==="Non fissata"?"#ef4444":"#0f172a" }}>{p.nextVisit==="Non fissata"?"⚠ —":p.nextVisit||"—"}</td><td style={{ padding:"8px 10px", fontSize:11, color:"#3b82f6", fontWeight:600 }}>→</td></tr>; })}</tbody>
+              </table>
+            </div>
+          </div>
+        </React.Fragment>}
+
+        {view==="gdpr-view" && <React.Fragment>
+          <div style={{ background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}><h1 style={{ margin:0, fontSize:15, fontWeight:700, color:"#0f172a" }}>Compliance GDPR</h1><ChatBtn/></div>
+          <div style={{ overflowY:"auto", padding:14, flex:1 }}>
+            {missCons>0&&<div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:7, padding:"8px 12px", marginBottom:12, fontSize:11, color:"#991b1b" }}><b>⚠ {missCons} paziente/i senza consenso sanitario</b> — {patients.filter(p=>!p.gdpr||!p.gdpr.consensoSanitario||!p.gdpr.consensoSanitario.granted).map(p=>p.name).join(", ")}.</div>}
+            <div style={{ background:"#fff", borderRadius:9, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse" }}><thead><tr style={{ background:"#f8fafc" }}>{["Paziente","San","WA","Mkt","Terzi","Scadenza",""].map(h => <th key={h} style={{ padding:"7px 10px", textAlign:"left", fontSize:9, fontWeight:600, color:"#475569", textTransform:"uppercase", borderBottom:"1px solid #e2e8f0" }}>{h}</th>)}</tr></thead>
+              <tbody>{patients.map((p,i) => { const g=p.gdpr||{}; return <tr key={p.id} onClick={() => { setSel(p); setView("paziente"); setTab("gdpr"); }} style={{ borderBottom:"1px solid #f1f5f9", background:(!g.consensoSanitario||!g.consensoSanitario.granted)?"#fef9f9":i%2===0?"#fff":"#fafbfc", cursor:"pointer" }}><td style={{ padding:"8px 10px", fontSize:12, fontWeight:600, color:"#0f172a" }}>{p.name}</td>{["consensoSanitario","consensoWhatsApp","consensoMarketing","consensoTerzi"].map(k => <td key={k} style={{ padding:"8px 10px", textAlign:"center" }}><span style={{ color:g[k]&&g[k].granted?"#10b981":"#ef4444", fontSize:13 }}>{g[k]&&g[k].granted?"✓":"✗"}</span></td>)}<td style={{ padding:"8px 10px", fontSize:10, color:"#f59e0b" }}>{g.scadenzaRetenzione||"—"}</td><td style={{ padding:"8px 10px", fontSize:10, color:"#3b82f6", fontWeight:600 }}>→</td></tr>; })}</tbody>
+              </table>
+            </div>
+          </div>
+        </React.Fragment>}
+
+        {view==="paziente" && sel && <React.Fragment>
+          <div style={{ background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 16px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:8 }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                  <h1 style={{ margin:0, fontSize:15, fontWeight:700, color:"#0f172a" }}>{sel.name}</h1>
+                  <span style={{ padding:"2px 8px", borderRadius:14, fontSize:10, fontWeight:700, background:SEM[sel.status].bg, color:SEM[sel.status].color }}>{SEM[sel.status].label}</span>
+                  {gdprBadge?<span style={{ padding:"2px 6px", borderRadius:10, fontSize:9, fontWeight:700, background:"#fee2e2", color:"#dc2626" }}>⚠ GDPR</span>:<span style={{ padding:"2px 6px", borderRadius:10, fontSize:9, fontWeight:600, background:"#d1fae5", color:"#065f46" }}>✓ GDPR</span>}
+                  {(sel.tags||[]).map(t => <span key={t} style={{ padding:"1px 5px", borderRadius:7, fontSize:9, background:"#f1f5f9", color:"#64748b" }}>{t}</span>)}
+                </div>
+                <div style={{ marginTop:3, fontSize:11, color:"#64748b", display:"flex", gap:10, flexWrap:"wrap" }}>
+                  <span>{sel.age}a · {sel.clinician}</span>
+                  <span>Piano: <b style={{ color:"#0f172a" }}>€{sel.planValue.toLocaleString()}</b></span>
+                  <span>Fatturato: <b style={{ color:"#10b981" }}>€{sel.invoiced.toLocaleString()}</b></span>
+                  <span>Residuo: <b style={{ color:"#f59e0b" }}>€{(sel.planValue-sel.invoiced).toLocaleString()}</b></span>
+                </div>
+              </div>
+              <div style={{ display:"flex", gap:5, flexShrink:0, alignItems:"center" }}>
+                <ChatBtn/>
+                <button onClick={() => setModal("edit-patient")} style={{ padding:"5px 9px", border:"1px solid #e2e8f0", borderRadius:5, background:"#fff", cursor:"pointer", fontSize:11, fontFamily:"inherit", color:"#374151" }}>✏</button>
+                <button onClick={() => runAI(sel)} style={{ background:"#1e40af", color:"#fff", border:"none", borderRadius:5, padding:"5px 9px", fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>✦ AI</button>
+              </div>
+            </div>
+            <div style={{ marginTop:7 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, color:"#94a3b8", marginBottom:2 }}><span>{sel.currentPhase}</span><span>{sel.progress}% · {sel.totalMonths}m · ultima:{sel.lastVisit||"—"} · prossima:<span style={{ color:sel.nextVisit==="Non fissata"?"#ef4444":"inherit" }}> {sel.nextVisit||"—"}</span></span></div>
+              <div style={{ height:3, background:"#e2e8f0", borderRadius:2 }}><div style={{ height:"100%", width:`${sel.progress}%`, background:SEM[sel.status].color, borderRadius:2 }}/></div>
+            </div>
+          </div>
+          {redAlerts>0&&<div style={{ background:"#fef2f2", borderBottom:"1px solid #fca5a5", padding:"5px 16px", display:"flex", alignItems:"center", gap:6 }}><span style={{ color:"#ef4444" }}>⚠</span><span style={{ fontSize:11, color:"#991b1b" }}><b>{redAlerts} alert rossi</b> — entro 24h</span></div>}
+          <div style={{ background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"0 16px", display:"flex", overflowX:"auto" }}>
+            {[{id:"timeline",label:"📅 Timeline"},{id:"discipline",label:"Discipline"},{id:"alert",label:`Alert${openAlerts.length>0?` (${openAlerts.length})`:""}`},{id:"analisi",label:"✦ AI"},{id:"gdpr",label:`🔒${gdprBadge?" ⚠":""}`}].map(t => <button key={t.id} onClick={() => { setTab(t.id); if(t.id==="analisi") runAI(sel); }} style={{ padding:"8px 12px", border:"none", borderBottom:tab===t.id?"2px solid #3b82f6":"2px solid transparent", background:"none", color:tab===t.id?"#1e40af":(t.id==="gdpr"&&gdprBadge)?"#ef4444":"#64748b", fontWeight:tab===t.id?600:400, fontSize:11, cursor:"pointer", marginBottom:-1, fontFamily:"inherit", whiteSpace:"nowrap" }}>{t.label}</button>)}
+          </div>
+          <div style={{ overflowY:"auto", padding:tab==="timeline"?"12px":"16px", flex:1 }}>
+            {tab==="timeline" && <Timeline patient={sel}/>}
+            {tab==="discipline" && <div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}><span style={{ fontSize:11, color:"#64748b" }}>{(sel.disciplines||[]).length} discipline</span><button onClick={() => setModal("new-disc")} style={{ padding:"5px 10px", border:"1px solid #bfdbfe", borderRadius:5, background:"#eff6ff", color:"#1e40af", cursor:"pointer", fontSize:11, fontWeight:600, fontFamily:"inherit" }}>+ Aggiungi</button></div>
+              <div style={{ background:"#fff", borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+                {(sel.disciplines||[]).length===0?<div style={{ padding:28, textAlign:"center", color:"#94a3b8", fontSize:11 }}>Nessuna disciplina.</div>:
+                <table style={{ width:"100%", borderCollapse:"collapse" }}><thead><tr style={{ background:"#f8fafc" }}>{["","Disciplina","Stato","Inizio","Fine","Sedute","Note",""].map(h => <th key={h} style={{ padding:"7px 10px", textAlign:"left", fontSize:9, fontWeight:600, color:"#475569", textTransform:"uppercase", borderBottom:"1px solid #e2e8f0" }}>{h}</th>)}</tr></thead>
+                <tbody>{(sel.disciplines||[]).map((d,i) => { const sc=DISC_STATUS[d.status]||DISC_STATUS["non-iniziata"]; const col=timelineColor(d,new Date()); return <tr key={d.id} style={{ borderBottom:"1px solid #f1f5f9", background:i%2===0?"#fff":"#fafbfc" }}><td style={{ padding:"8px 10px" }}><div style={{ width:8, height:8, borderRadius:2, background:col.bar }}/></td><td style={{ padding:"8px 10px", fontSize:11, fontWeight:600, color:"#0f172a" }}>{d.name}</td><td style={{ padding:"8px 10px" }}><span style={{ padding:"2px 7px", borderRadius:8, fontSize:10, fontWeight:600, background:sc.bg, color:sc.text, display:"inline-flex", alignItems:"center", gap:3 }}><span style={{ width:5, height:5, borderRadius:"50%", background:sc.dot, display:"inline-block" }}/>{sc.label}</span></td><td style={{ padding:"8px 10px", fontSize:11, color:"#475569" }}>{d.start||"—"}</td><td style={{ padding:"8px 10px", fontSize:11, color:"#475569" }}>{d.end||"—"}</td><td style={{ padding:"8px 10px", fontSize:11, color:"#475569", fontFamily:"monospace" }}>{d.sessions||"—"}</td><td style={{ padding:"8px 10px", fontSize:11, color:(d.notes||"").includes("⚠")?"#ef4444":"#64748b", maxWidth:140 }}>{d.notes||"—"}</td><td style={{ padding:"8px 10px", whiteSpace:"nowrap" }}><button onClick={() => { setEditDisc(d); setModal("edit-disc"); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:11, color:"#94a3b8", padding:"2px 4px" }}>✏</button><button onClick={() => { if (window.confirm("Eliminare?")) deleteDisc(d.id); }} style={{ background:"none", border:"none", cursor:"pointer", fontSize:11, color:"#fca5a5", padding:"2px 4px" }}>✕</button></td></tr>; })}</tbody>
+                </table>}
+              </div>
+            </div>}
+            {tab==="alert" && <div style={{ maxWidth:620 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}><span style={{ fontSize:11, color:"#64748b" }}>{openAlerts.length} alert aperti</span><button onClick={() => setModal("new-alert")} style={{ padding:"5px 10px", border:"1px solid #fca5a5", borderRadius:5, background:"#fef2f2", color:"#dc2626", cursor:"pointer", fontSize:11, fontWeight:600, fontFamily:"inherit" }}>+ Aggiungi</button></div>
+              {openAlerts.length===0&&<div style={{ padding:28, textAlign:"center", color:"#10b981", fontSize:12, background:"#fff", borderRadius:8 }}>✓ Nessun alert aperto</div>}
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>{openAlerts.map(a => { const al=AL[a.level]; return <div key={a.id} style={{ background:al.bg, border:`1px solid ${al.border}`, borderRadius:7, padding:"10px 13px", display:"flex", justifyContent:"space-between", alignItems:"center", gap:10 }}><div style={{ flex:1 }}><div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:3 }}><span style={{ width:7, height:7, borderRadius:"50%", background:al.color, display:"inline-block" }}/><span style={{ fontSize:10, fontWeight:700, color:al.color, textTransform:"uppercase" }}>{a.level}</span><span style={{ fontSize:10, color:"#64748b" }}>Scad: {a.due}</span></div><div style={{ fontSize:12, color:"#0f172a", fontWeight:500 }}>{a.text}</div></div><button onClick={() => closeAlert(a.id)} style={{ background:"none", border:`1px solid ${al.border}`, borderRadius:5, padding:"4px 8px", fontSize:10, cursor:"pointer", color:al.color, fontWeight:600, whiteSpace:"nowrap", fontFamily:"inherit" }}>Gestito ✓</button></div>; })}</div>
+              {(sel.alerts||[]).filter(a=>!a.open).length>0&&<div style={{ marginTop:10 }}><div style={{ fontSize:10, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:5 }}>Risolti</div>{(sel.alerts||[]).filter(a=>!a.open).map(a => <div key={a.id} style={{ padding:"5px 10px", background:"#f8fafc", borderRadius:5, marginBottom:3, fontSize:11, color:"#94a3b8", textDecoration:"line-through" }}>{a.text}</div>)}</div>}
+            </div>}
+            {tab==="analisi" && <div style={{ maxWidth:580 }}>
+              {aiLoading&&<div style={{ display:"flex", alignItems:"center", gap:10, padding:24, color:"#3b82f6" }}><div style={{ width:16, height:16, border:"2px solid #bfdbfe", borderTopColor:"#3b82f6", borderRadius:"50%", animation:"spin 0.8s linear infinite" }}/><span style={{ fontSize:12 }}>Analisi in corso…</span></div>}
+              {!aiLoading&&aiText[sel.id]&&<div style={{ background:"#fff", borderRadius:8, padding:18, boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}><div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:12, paddingBottom:10, borderBottom:"1px solid #e2e8f0" }}><span style={{ color:"#3b82f6", fontSize:14 }}>✦</span><span style={{ fontSize:12, fontWeight:600, color:"#1e40af" }}>Analisi AI — {sel.name}</span><button onClick={() => { setAiText(p => { const n={...p}; delete n[sel.id]; return n; }); runAI(sel); }} style={{ marginLeft:"auto", background:"none", border:"1px solid #bfdbfe", borderRadius:5, padding:"2px 8px", fontSize:10, cursor:"pointer", color:"#1e40af", fontFamily:"inherit" }}>↺</button></div><div style={{ fontSize:12, lineHeight:1.7 }}>{renderAI(aiText[sel.id])}</div></div>}
+              {!aiLoading&&!aiText[sel.id]&&<div style={{ textAlign:"center", padding:28, background:"#fff", borderRadius:8 }}><div style={{ fontSize:22, marginBottom:10, color:"#3b82f6" }}>✦</div><div style={{ fontSize:13, color:"#64748b", marginBottom:12 }}>Analisi percorso di {sel.name}</div><button onClick={() => runAI(sel)} style={{ background:"#1e40af", color:"#fff", border:"none", borderRadius:7, padding:"8px 16px", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>Avvia analisi</button></div>}
+            </div>}
+            {tab==="gdpr" && <GDPRTab patient={sel} onUpdate={upd => updateSel(upd)}/>}
+          </div>
+        </React.Fragment>}
+
+        {view==="paziente"&&!sel&&<div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:12 }}><div style={{ fontSize:13, color:"#94a3b8" }}>Seleziona un paziente dalla sidebar</div><button onClick={() => setModal("new-patient")} style={{ background:"#1e40af", color:"#fff", border:"none", borderRadius:7, padding:"8px 16px", cursor:"pointer", fontSize:12, fontFamily:"inherit" }}>+ Nuovo paziente</button></div>}
+      </div>
+
+      {/* CHAT PANEL */}
+      <div style={{ width:chatOpen?290:0, minWidth:chatOpen?290:0, overflow:"hidden", transition:"width 0.2s ease, min-width 0.2s ease", background:"#fff", borderLeft:chatOpen?"2px solid #7c3aed":"none", display:"flex", flexDirection:"column", flexShrink:0 }}>
+        {chatOpen && <ChatPanel patients={patients} currentPatient={view==="paziente"?sel:null}/>}
+      </div>
+
+      {modal==="new-patient"&&<Modal title="Nuovo paziente" onClose={() => setModal(null)} wide><PatientForm onSave={saveNewPatient} onClose={() => setModal(null)}/></Modal>}
+      {modal==="edit-patient"&&sel&&<Modal title={`Modifica — ${sel.name}`} onClose={() => setModal(null)} wide><PatientForm initial={sel} onSave={saveEditPatient} onClose={() => setModal(null)} onDelete={deletePatient}/></Modal>}
+      {modal==="new-disc"&&<Modal title="Aggiungi disciplina" onClose={() => setModal(null)}><DisciplineForm onSave={saveNewDisc} onClose={() => setModal(null)}/></Modal>}
+      {modal==="edit-disc"&&editDisc&&<Modal title={`Modifica — ${editDisc.name}`} onClose={() => { setModal(null); setEditDisc(null); }}><DisciplineForm initial={editDisc} onSave={saveEditDisc} onClose={() => { setModal(null); setEditDisc(null); }}/></Modal>}
+      {modal==="new-alert"&&<Modal title="Aggiungi alert" onClose={() => setModal(null)}><AlertForm onSave={saveNewAlert} onClose={() => setModal(null)}/></Modal>}
+
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}*{box-sizing:border-box}select:focus,input:focus,textarea:focus{outline:none;border-color:#3b82f6!important;box-shadow:0 0 0 3px rgba(59,130,246,0.1)}`}</style>
+    </div>
+  );
+}
