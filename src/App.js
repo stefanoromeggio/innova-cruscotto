@@ -396,6 +396,9 @@ export default function App() {
   const [stStatus,   setStStatus]   = useState("loading");
   const [showBanner, setShowBanner] = useState(false);
   const [chatOpen,   setChatOpen]   = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterStatus, setFilterStatus] = useState("tutti");
+  const [filterExtra, setFilterExtra] = useState("tutti"); // tutti | alert | gdpr | noappt
 
   useEffect(() => {
     try {
@@ -502,11 +505,84 @@ export default function App() {
           </button>
         </div>
         <div style={{ overflowY:"auto", flex:1 }}>
-          <div style={{ padding:"6px 12px 3px", fontSize:8, color:"#334155", textTransform:"uppercase", letterSpacing:"0.1em", fontWeight:600 }}>Pazienti</div>
-          {patients.map(p => {
+          {/* SEARCH */}
+          <div style={{ padding:"6px 8px 4px", borderBottom:"1px solid #1e293b" }}>
+            <div style={{ position:"relative" }}>
+              <svg style={{ position:"absolute", left:7, top:"50%", transform:"translateY(-50%)", pointerEvents:"none" }} width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#475569" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Cerca paziente, clinico, tag…"
+                style={{ width:"100%", padding:"5px 22px 5px 22px", fontSize:10, background:"#1e293b", border:"1px solid #334155", borderRadius:5, color:"#e2e8f0", outline:"none", fontFamily:"inherit", boxSizing:"border-box" }}
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery("")} style={{ position:"absolute", right:6, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:12, lineHeight:1, padding:0 }}>✕</button>
+              )}
+            </div>
+          </div>
+
+          {/* FILTERS */}
+          <div style={{ padding:"4px 8px", borderBottom:"1px solid #1e293b", display:"flex", flexDirection:"column", gap:3 }}>
+            <div style={{ display:"flex", gap:2 }}>
+              {[["tutti","Tutti"],["rosso","🔴"],["arancio","🟠"],["verde","🟢"]].map(([val, lab]) => (
+                <button key={val} onClick={() => setFilterStatus(val)}
+                  style={{ flex:1, padding:"3px 2px", fontSize:9, fontWeight:600, fontFamily:"inherit", cursor:"pointer", borderRadius:4, border:"none",
+                    background: filterStatus===val ? (val==="rosso"?"#ef4444":val==="arancio"?"#f59e0b":val==="verde"?"#10b981":"#3b82f6") : "#1e293b",
+                    color: filterStatus===val ? "#fff" : "#64748b" }}>
+                  {lab}
+                </button>
+              ))}
+            </div>
+            <div style={{ display:"flex", gap:2 }}>
+              {[["tutti","Tutti"],["alert","🔔 Alert"],["gdpr","⚠ GDPR"],["noappt","📅 No appt"]].map(([val, lab]) => (
+                <button key={val} onClick={() => setFilterExtra(val)}
+                  style={{ flex:1, padding:"3px 2px", fontSize:9, fontWeight:600, fontFamily:"inherit", cursor:"pointer", borderRadius:4, border:"none",
+                    background: filterExtra===val ? "#7c3aed" : "#1e293b",
+                    color: filterExtra===val ? "#fff" : "#64748b" }}>
+                  {lab}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* PATIENT LIST — filtered */}
+          <div style={{ padding:"4px 12px 3px", fontSize:8, color:"#334155", textTransform:"uppercase", letterSpacing:"0.1em", fontWeight:600, display:"flex", justifyContent:"space-between" }}>
+            <span>Pazienti</span>
+            <span style={{ color:"#475569" }}>
+              {patients.filter(p => {
+                const q = searchQuery.toLowerCase();
+                const matchQ = !q || p.name.toLowerCase().includes(q) || p.clinician.toLowerCase().includes(q) || (p.tags||[]).some(t => t.toLowerCase().includes(q)) || p.currentPhase.toLowerCase().includes(q);
+                const matchS = filterStatus==="tutti" || p.status===filterStatus;
+                const matchE = filterExtra==="tutti" || (filterExtra==="alert" && (p.alerts||[]).some(a=>a.open)) || (filterExtra==="gdpr" && (!p.gdpr||!p.gdpr.consensoSanitario||!p.gdpr.consensoSanitario.granted)) || (filterExtra==="noappt" && p.nextVisit==="Non fissata");
+                return matchQ && matchS && matchE;
+              }).length}/{patients.length}
+            </span>
+          </div>
+          {patients.filter(p => {
+            const q = searchQuery.toLowerCase();
+            const matchQ = !q || p.name.toLowerCase().includes(q) || p.clinician.toLowerCase().includes(q) || (p.tags||[]).some(t => t.toLowerCase().includes(q)) || p.currentPhase.toLowerCase().includes(q);
+            const matchS = filterStatus==="tutti" || p.status===filterStatus;
+            const matchE = filterExtra==="tutti" || (filterExtra==="alert" && (p.alerts||[]).some(a=>a.open)) || (filterExtra==="gdpr" && (!p.gdpr||!p.gdpr.consensoSanitario||!p.gdpr.consensoSanitario.granted)) || (filterExtra==="noappt" && p.nextVisit==="Non fissata");
+            return matchQ && matchS && matchE;
+          }).map(p => {
             const s = SEM[p.status]; const isSel = sel&&sel.id===p.id&&view==="paziente"; const n=(p.alerts||[]).filter(a=>a.open).length; const noG=!p.gdpr||!p.gdpr.consensoSanitario||!p.gdpr.consensoSanitario.granted;
             return <div key={p.id} onClick={() => { setSel(p); setView("paziente"); setTab("timeline"); }} style={{ padding:"8px 12px", cursor:"pointer", background:isSel?"#1e293b":"transparent", borderLeft:`3px solid ${isSel?s.color:"transparent"}` }}><div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}><span style={{ fontSize:11, fontWeight:isSel?600:400, color:isSel?"#f1f5f9":"#94a3b8" }}>{p.name}</span><div style={{ display:"flex", alignItems:"center", gap:3 }}>{noG&&<span style={{ fontSize:7, color:"#ef4444", fontWeight:700 }}>GDPR</span>}{n>0&&<div style={{ background:p.status==="rosso"?"#ef4444":"#f59e0b", color:"#fff", borderRadius:7, fontSize:8, fontWeight:700, padding:"0 4px" }}>{n}</div>}<div style={{ width:6, height:6, borderRadius:"50%", background:s.color }}/></div></div><div style={{ fontSize:9, color:"#475569", marginTop:1 }}>{p.currentPhase.length>27?p.currentPhase.slice(0,27)+"…":p.currentPhase}</div></div>;
           })}
+          {patients.filter(p => {
+            const q = searchQuery.toLowerCase();
+            const matchQ = !q || p.name.toLowerCase().includes(q) || p.clinician.toLowerCase().includes(q) || (p.tags||[]).some(t => t.toLowerCase().includes(q)) || p.currentPhase.toLowerCase().includes(q);
+            const matchS = filterStatus==="tutti" || p.status===filterStatus;
+            const matchE = filterExtra==="tutti" || (filterExtra==="alert" && (p.alerts||[]).some(a=>a.open)) || (filterExtra==="gdpr" && (!p.gdpr||!p.gdpr.consensoSanitario||!p.gdpr.consensoSanitario.granted)) || (filterExtra==="noappt" && p.nextVisit==="Non fissata");
+            return matchQ && matchS && matchE;
+          }).length === 0 && (
+            <div style={{ padding:"16px 12px", textAlign:"center", color:"#334155", fontSize:11 }}>
+              Nessun paziente trovato
+              <br/>
+              <button onClick={() => { setSearchQuery(""); setFilterStatus("tutti"); setFilterExtra("tutti"); }} style={{ marginTop:6, background:"none", border:"none", color:"#3b82f6", fontSize:10, cursor:"pointer", fontFamily:"inherit" }}>
+                Reimposta filtri
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
