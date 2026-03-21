@@ -372,6 +372,135 @@ function AlertForm({ onSave, onClose }) {
   return <div><div style={{ display:"flex", flexDirection:"column", gap:10 }}><div><label style={labelStyle}>Livello</label><select value={f.level} onChange={e => set("level",e.target.value)} style={inputStyle}><option value="rosso">🔴 Rosso — entro 24h</option><option value="arancio">🟠 Arancio — entro 3 giorni</option><option value="giallo">🟡 Giallo — entro 7 giorni</option></select></div><div><label style={labelStyle}>Descrizione</label><textarea value={f.text} onChange={e => set("text",e.target.value)} style={{ ...inputStyle, minHeight:55, resize:"vertical" }}/></div><div><label style={labelStyle}>Scadenza</label><input value={f.due} onChange={e => set("due",e.target.value)} style={inputStyle} placeholder="dd/mm/yyyy o URGENTE"/></div></div><div style={{ display:"flex", justifyContent:"flex-end", gap:8, marginTop:16, paddingTop:12, borderTop:"1px solid #e2e8f0" }}><button onClick={onClose} style={{ padding:"6px 14px", border:"1px solid #e2e8f0", borderRadius:5, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:12 }}>Annulla</button><button onClick={() => { if (f.text.trim()) onSave({ ...f, id:Date.now(), open:true }); }} style={{ padding:"6px 14px", border:"none", borderRadius:5, background:"#dc2626", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:12, fontWeight:600 }}>Aggiungi</button></div></div>;
 }
 
+// ─── PAGAMENTI TAB ────────────────────────────────────────────────────────────
+function PagamentiTab({ patient, onUpdate }) {
+  const pag = patient.pagamenti || { voci:[], pagamenti:[] };
+  const [showVoceForm, setShowVoceForm] = useState(false);
+  const [showPagForm,  setShowPagForm]  = useState(false);
+  const [voce,  setVoce]  = useState({ descrizione:"", importo:"", fase:"" });
+  const [pForm, setPForm] = useState({ data:getToday(), importo:"", metodo:"Bonifico", note:"" });
+
+  const totPreventivo = pag.voci.reduce((s,v) => s + (+v.importo||0), 0);
+  const totPagato     = pag.pagamenti.reduce((s,p) => s + (+p.importo||0), 0);
+  const residuo       = totPreventivo - totPagato;
+  const percPagato    = totPreventivo > 0 ? Math.min(totPagato / totPreventivo, 1) : 0;
+
+  function saveVoce() {
+    if (!voce.descrizione.trim() || !voce.importo) return;
+    const nuove = [...pag.voci, { id:Date.now(), ...voce, importo:+voce.importo }];
+    onUpdate({ ...patient, pagamenti:{ ...pag, voci:nuove }, auditLog:[...(patient.auditLog||[]), makeAuditEntry("Voce preventivo aggiunta", `${voce.descrizione} — €${voce.importo}`)] });
+    setVoce({ descrizione:"", importo:"", fase:"" });
+    setShowVoceForm(false);
+  }
+
+  function savePag() {
+    if (!pForm.importo) return;
+    const nuovi = [...pag.pagamenti, { id:Date.now(), ...pForm, importo:+pForm.importo }];
+    onUpdate({ ...patient, pagamenti:{ ...pag, pagamenti:nuovi }, auditLog:[...(patient.auditLog||[]), makeAuditEntry("Pagamento registrato", `€${pForm.importo} — ${pForm.metodo}`)] });
+    setPForm({ data:getToday(), importo:"", metodo:"Bonifico", note:"" });
+    setShowPagForm(false);
+  }
+
+  function deleteVoce(id) {
+    if (!window.confirm("Eliminare questa voce?")) return;
+    onUpdate({ ...patient, pagamenti:{ ...pag, voci:pag.voci.filter(v => v.id!==id) } });
+  }
+
+  function deletePag(id) {
+    if (!window.confirm("Eliminare questo pagamento?")) return;
+    onUpdate({ ...patient, pagamenti:{ ...pag, pagamenti:pag.pagamenti.filter(p => p.id!==id) } });
+  }
+
+  const statoColor = residuo <= 0 ? "#10b981" : percPagato > 0 ? "#f59e0b" : "#ef4444";
+  const statoLabel = residuo <= 0 ? "Saldato" : percPagato > 0 ? "Parziale" : "Non iniziato";
+  const METODI = ["Bonifico","Contanti","POS/Carta","Assegno","Finanziamento","Altro"];
+
+  return (
+    <div style={{ maxWidth:720 }}>
+      <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+        {[
+          ["Preventivo",`€${totPreventivo.toLocaleString()}`,"#0f172a"],
+          ["Incassato",`€${totPagato.toLocaleString()}`,"#10b981"],
+          ["Residuo",`€${residuo.toLocaleString()}`,residuo>0?"#ef4444":"#10b981"],
+          ["Stato",statoLabel,statoColor],
+        ].map(([lab,val,c]) => (
+          <div key={lab} style={{ background:"#fff", borderRadius:8, padding:"10px 14px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", flex:1, minWidth:110 }}>
+            <div style={{ fontSize:9, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:2 }}>{lab}</div>
+            <div style={{ fontSize:16, fontWeight:700, color:c }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ background:"#fff", borderRadius:8, padding:"12px 16px", marginBottom:14, boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#64748b", marginBottom:6 }}>
+          <span>Avanzamento pagamenti</span>
+          <span style={{ fontWeight:600, color:statoColor }}>{Math.round(percPagato*100)}%</span>
+        </div>
+        <div style={{ height:8, background:"#e2e8f0", borderRadius:4 }}>
+          <div style={{ height:"100%", width:`${percPagato*100}%`, background:statoColor, borderRadius:4 }}/>
+        </div>
+      </div>
+
+      <div style={{ background:"#fff", borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", marginBottom:14 }}>
+        <div style={{ padding:"10px 14px", borderBottom:"1px solid #e2e8f0", background:"#f8fafc", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:12, fontWeight:600, color:"#0f172a" }}>Voci preventivo</span>
+          <button onClick={() => setShowVoceForm(v => !v)} style={{ padding:"4px 10px", border:"1px solid #bfdbfe", borderRadius:5, background:"#eff6ff", color:"#1e40af", cursor:"pointer", fontSize:11, fontWeight:600, fontFamily:"inherit" }}>+ Aggiungi voce</button>
+        </div>
+        {showVoceForm && (
+          <div style={{ padding:"12px 14px", borderBottom:"1px solid #e2e8f0", background:"#f0f9ff", display:"flex", gap:8, flexWrap:"wrap", alignItems:"flex-end" }}>
+            <div style={{ flex:2, minWidth:140 }}><label style={labelStyle}>Descrizione</label><input value={voce.descrizione} onChange={e => setVoce(p=>({...p,descrizione:e.target.value}))} style={inputStyle} placeholder="es. Implantologia arcata superiore"/></div>
+            <div style={{ flex:1, minWidth:90 }}><label style={labelStyle}>Importo €</label><input type="number" value={voce.importo} onChange={e => setVoce(p=>({...p,importo:e.target.value}))} style={inputStyle} placeholder="0"/></div>
+            <div style={{ flex:1, minWidth:100 }}><label style={labelStyle}>Fase</label><input value={voce.fase} onChange={e => setVoce(p=>({...p,fase:e.target.value}))} style={inputStyle} placeholder="es. Implantologia"/></div>
+            <div style={{ display:"flex", gap:6 }}>
+              <button onClick={() => setShowVoceForm(false)} style={{ padding:"7px 12px", border:"1px solid #e2e8f0", borderRadius:5, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>Annulla</button>
+              <button onClick={saveVoce} style={{ padding:"7px 12px", border:"none", borderRadius:5, background:"#1e40af", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>Salva</button>
+            </div>
+          </div>
+        )}
+        {pag.voci.length === 0
+          ? <div style={{ padding:"20px", textAlign:"center", color:"#94a3b8", fontSize:11 }}>Nessuna voce. Aggiungi le voci del preventivo per tracciare i pagamenti.</div>
+          : <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead><tr style={{ background:"#f8fafc" }}>{["Descrizione","Fase","Importo",""].map(h => <th key={h} style={{ padding:"7px 12px", textAlign:"left", fontSize:9, fontWeight:600, color:"#475569", textTransform:"uppercase", borderBottom:"1px solid #e2e8f0" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {pag.voci.map((v,i) => <tr key={v.id} style={{ borderBottom:"1px solid #f1f5f9", background:i%2===0?"#fff":"#fafbfc" }}><td style={{ padding:"9px 12px", fontSize:12, color:"#0f172a", fontWeight:500 }}>{v.descrizione}</td><td style={{ padding:"9px 12px", fontSize:11, color:"#64748b" }}>{v.fase||"—"}</td><td style={{ padding:"9px 12px", fontSize:12, fontWeight:600, color:"#0f172a" }}>€{(+v.importo).toLocaleString()}</td><td style={{ padding:"9px 12px" }}><button onClick={() => deleteVoce(v.id)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:11, color:"#fca5a5" }}>✕</button></td></tr>)}
+                <tr style={{ background:"#f8fafc", borderTop:"2px solid #e2e8f0" }}><td colSpan={2} style={{ padding:"9px 12px", fontSize:11, fontWeight:700, color:"#475569" }}>TOTALE PREVENTIVO</td><td style={{ padding:"9px 12px", fontSize:13, fontWeight:700, color:"#0f172a" }}>€{totPreventivo.toLocaleString()}</td><td/></tr>
+              </tbody>
+            </table>
+        }
+      </div>
+
+      <div style={{ background:"#fff", borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}>
+        <div style={{ padding:"10px 14px", borderBottom:"1px solid #e2e8f0", background:"#f8fafc", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:12, fontWeight:600, color:"#0f172a" }}>Registro pagamenti</span>
+          <button onClick={() => setShowPagForm(v => !v)} style={{ padding:"4px 10px", border:"1px solid #bbf7d0", borderRadius:5, background:"#f0fdf4", color:"#15803d", cursor:"pointer", fontSize:11, fontWeight:600, fontFamily:"inherit" }}>+ Registra pagamento</button>
+        </div>
+        {showPagForm && (
+          <div style={{ padding:"12px 14px", borderBottom:"1px solid #e2e8f0", background:"#f0fdf4", display:"flex", gap:8, flexWrap:"wrap", alignItems:"flex-end" }}>
+            <div style={{ flex:1, minWidth:100 }}><label style={labelStyle}>Data</label><input value={pForm.data} onChange={e => setPForm(p=>({...p,data:e.target.value}))} style={inputStyle} placeholder="dd/mm/yyyy"/></div>
+            <div style={{ flex:1, minWidth:90 }}><label style={labelStyle}>Importo €</label><input type="number" value={pForm.importo} onChange={e => setPForm(p=>({...p,importo:e.target.value}))} style={inputStyle} placeholder="0"/></div>
+            <div style={{ flex:1, minWidth:110 }}><label style={labelStyle}>Metodo</label><select value={pForm.metodo} onChange={e => setPForm(p=>({...p,metodo:e.target.value}))} style={inputStyle}>{METODI.map(m => <option key={m}>{m}</option>)}</select></div>
+            <div style={{ flex:2, minWidth:120 }}><label style={labelStyle}>Note</label><input value={pForm.note} onChange={e => setPForm(p=>({...p,note:e.target.value}))} style={inputStyle} placeholder="Acconto, rata 1, saldo…"/></div>
+            <div style={{ display:"flex", gap:6 }}>
+              <button onClick={() => setShowPagForm(false)} style={{ padding:"7px 12px", border:"1px solid #e2e8f0", borderRadius:5, background:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:11 }}>Annulla</button>
+              <button onClick={savePag} style={{ padding:"7px 12px", border:"none", borderRadius:5, background:"#10b981", color:"#fff", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:600 }}>Registra</button>
+            </div>
+          </div>
+        )}
+        {pag.pagamenti.length === 0
+          ? <div style={{ padding:"20px", textAlign:"center", color:"#94a3b8", fontSize:11 }}>Nessun pagamento registrato.</div>
+          : <table style={{ width:"100%", borderCollapse:"collapse" }}>
+              <thead><tr style={{ background:"#f8fafc" }}>{["Data","Importo","Metodo","Note",""].map(h => <th key={h} style={{ padding:"7px 12px", textAlign:"left", fontSize:9, fontWeight:600, color:"#475569", textTransform:"uppercase", borderBottom:"1px solid #e2e8f0" }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {pag.pagamenti.slice().sort((a,b) => a.data>b.data?-1:1).map((p,i) => <tr key={p.id} style={{ borderBottom:"1px solid #f1f5f9", background:i%2===0?"#fff":"#fafbfc" }}><td style={{ padding:"9px 12px", fontSize:11, color:"#475569", fontFamily:"monospace" }}>{p.data}</td><td style={{ padding:"9px 12px", fontSize:12, fontWeight:700, color:"#10b981" }}>+€{(+p.importo).toLocaleString()}</td><td style={{ padding:"9px 12px", fontSize:11, color:"#64748b" }}>{p.metodo}</td><td style={{ padding:"9px 12px", fontSize:11, color:"#64748b" }}>{p.note||"—"}</td><td style={{ padding:"9px 12px" }}><button onClick={() => deletePag(p.id)} style={{ background:"none", border:"none", cursor:"pointer", fontSize:11, color:"#fca5a5" }}>✕</button></td></tr>)}
+                <tr style={{ background:"#f8fafc", borderTop:"2px solid #e2e8f0" }}><td style={{ padding:"9px 12px", fontSize:11, fontWeight:700, color:"#475569" }}>TOTALE INCASSATO</td><td style={{ padding:"9px 12px", fontSize:13, fontWeight:700, color:"#10b981" }}>€{totPagato.toLocaleString()}</td><td colSpan={3} style={{ padding:"9px 12px", fontSize:11, color:residuo>0?"#ef4444":"#10b981", fontWeight:600 }}>{residuo>0?`Residuo: €${residuo.toLocaleString()}`:"✓ Saldato"}</td></tr>
+              </tbody>
+            </table>
+        }
+      </div>
+    </div>
+  );
+}
+
 function GDPRTab({ patient, onUpdate }) {
   const g = patient.gdpr || defaultGdpr(patient.acceptedDate);
   function updateConsent(key, field, value) { const cur = g[key]||{granted:false,date:null,method:"firma_modulo"}; const cons = CONSENTS.find(c => c.key===key); const entry = makeAuditEntry(value?"Consenso concesso":"Consenso revocato", cons?cons.label:key); onUpdate({ ...patient, gdpr:{ ...g, [key]:{ ...cur, [field]:value } }, auditLog:[...(patient.auditLog||[]), entry] }); }
@@ -645,7 +774,7 @@ export default function App() {
           </div>
           {redAlerts>0&&<div style={{ background:"#fef2f2", borderBottom:"1px solid #fca5a5", padding:"5px 16px", display:"flex", alignItems:"center", gap:6 }}><span style={{ color:"#ef4444" }}>⚠</span><span style={{ fontSize:11, color:"#991b1b" }}><b>{redAlerts} alert rossi</b> — entro 24h</span></div>}
           <div style={{ background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"0 16px", display:"flex", overflowX:"auto" }}>
-            {[{id:"timeline",label:"📅 Timeline"},{id:"discipline",label:"Discipline"},{id:"alert",label:`Alert${openAlerts.length>0?` (${openAlerts.length})`:""}`},{id:"analisi",label:"✦ AI"},{id:"gdpr",label:`🔒${gdprBadge?" ⚠":""}`}].map(t => <button key={t.id} onClick={() => { setTab(t.id); if(t.id==="analisi") runAI(sel); }} style={{ padding:"8px 12px", border:"none", borderBottom:tab===t.id?"2px solid #3b82f6":"2px solid transparent", background:"none", color:tab===t.id?"#1e40af":(t.id==="gdpr"&&gdprBadge)?"#ef4444":"#64748b", fontWeight:tab===t.id?600:400, fontSize:11, cursor:"pointer", marginBottom:-1, fontFamily:"inherit", whiteSpace:"nowrap" }}>{t.label}</button>)}
+            {[{id:"timeline",label:"📅 Timeline"},{id:"discipline",label:"Discipline"},{id:"alert",label:`Alert${openAlerts.length>0?` (${openAlerts.length})`:""}`},{id:"pagamenti",label:"💰 Pagamenti"},{id:"analisi",label:"✦ AI"},{id:"gdpr",label:`🔒${gdprBadge?" ⚠":""}`}].map(t => <button key={t.id} onClick={() => { setTab(t.id); if(t.id==="analisi") runAI(sel); }} style={{ padding:"8px 12px", border:"none", borderBottom:tab===t.id?"2px solid #3b82f6":"2px solid transparent", background:"none", color:tab===t.id?"#1e40af":(t.id==="gdpr"&&gdprBadge)?"#ef4444":"#64748b", fontWeight:tab===t.id?600:400, fontSize:11, cursor:"pointer", marginBottom:-1, fontFamily:"inherit", whiteSpace:"nowrap" }}>{t.label}</button>)}
           </div>
           <div style={{ overflowY:"auto", padding:tab==="timeline"?"12px":"16px", flex:1 }}>
             {tab==="timeline" && <Timeline patient={sel}/>}
@@ -669,6 +798,7 @@ export default function App() {
               {!aiLoading&&aiText[sel.id]&&<div style={{ background:"#fff", borderRadius:8, padding:18, boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}><div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:12, paddingBottom:10, borderBottom:"1px solid #e2e8f0" }}><span style={{ color:"#3b82f6", fontSize:14 }}>✦</span><span style={{ fontSize:12, fontWeight:600, color:"#1e40af" }}>Analisi AI — {sel.name}</span><button onClick={() => { setAiText(p => { const n={...p}; delete n[sel.id]; return n; }); runAI(sel); }} style={{ marginLeft:"auto", background:"none", border:"1px solid #bfdbfe", borderRadius:5, padding:"2px 8px", fontSize:10, cursor:"pointer", color:"#1e40af", fontFamily:"inherit" }}>↺</button></div><div style={{ fontSize:12, lineHeight:1.7 }}>{renderAI(aiText[sel.id])}</div></div>}
               {!aiLoading&&!aiText[sel.id]&&<div style={{ textAlign:"center", padding:28, background:"#fff", borderRadius:8 }}><div style={{ fontSize:22, marginBottom:10, color:"#3b82f6" }}>✦</div><div style={{ fontSize:13, color:"#64748b", marginBottom:12 }}>Analisi percorso di {sel.name}</div><button onClick={() => runAI(sel)} style={{ background:"#1e40af", color:"#fff", border:"none", borderRadius:7, padding:"8px 16px", fontSize:12, cursor:"pointer", fontFamily:"inherit" }}>Avvia analisi</button></div>}
             </div>}
+            {tab==="pagamenti" && <PagamentiTab patient={sel} onUpdate={upd => updateSel(upd)}/>}
             {tab==="gdpr" && <GDPRTab patient={sel} onUpdate={upd => updateSel(upd)}/>}
           </div>
         </React.Fragment>}
