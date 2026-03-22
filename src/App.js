@@ -833,7 +833,7 @@ function App({ session, onLogout }) {
           .from('patients')
           .select('data')
           .eq('id', 'innova-clinique')
-          .single();
+          .maybeSingle();
         if (sbError) {
           console.error('Supabase load error:', sbError.message, sbError.code);
           setStStatus("error_sb");
