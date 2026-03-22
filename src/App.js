@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { supabase } from './supabase';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const STORAGE_KEY = "innova_v4";
@@ -508,12 +509,305 @@ function GDPRTab({ patient, onUpdate }) {
   return <div>{!g.consensoSanitario.granted&&<div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:7, padding:"8px 12px", marginBottom:11, fontSize:11, color:"#991b1b" }}><b>⚠ Consenso sanitario mancante</b></div>}<div style={{ background:"#fff", borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", marginBottom:11 }}><table style={{ width:"100%", borderCollapse:"collapse" }}><thead><tr style={{ background:"#f8fafc" }}>{["Finalità","Req.","Stato","Data"].map(h => <th key={h} style={{ padding:"7px 10px", textAlign:"left", fontSize:9, fontWeight:600, color:"#475569", textTransform:"uppercase", letterSpacing:"0.05em", borderBottom:"1px solid #e2e8f0" }}>{h}</th>)}</tr></thead><tbody>{CONSENTS.map((c,i) => { const con=g[c.key]||{granted:false,date:"",method:"firma_modulo"}; return <tr key={c.key} style={{ borderBottom:"1px solid #f1f5f9", background:i%2===0?"#fff":"#fafbfc" }}><td style={{ padding:"8px 10px" }}><div style={{ fontSize:11, fontWeight:500, color:"#0f172a" }}>{c.label}</div><div style={{ fontSize:9, color:"#94a3b8" }}>{c.legal}</div></td><td style={{ padding:"8px 10px" }}><span style={{ padding:"1px 5px", borderRadius:6, fontSize:9, fontWeight:600, background:c.required?"#fef2f2":"#f1f5f9", color:c.required?"#dc2626":"#64748b" }}>{c.required?"Sì":"No"}</span></td><td style={{ padding:"8px 10px" }}><button onClick={() => updateConsent(c.key,"granted",!con.granted)} style={{ padding:"2px 8px", border:"none", borderRadius:8, fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"inherit", background:con.granted?"#d1fae5":"#fee2e2", color:con.granted?"#065f46":"#991b1b" }}>{con.granted?"✓ Sì":"✗ No"}</button></td><td style={{ padding:"8px 10px" }}><input value={con.date||""} onChange={e => updateConsent(c.key,"date",e.target.value)} style={{ ...inputStyle, width:88, padding:"3px 6px", fontSize:10 }} placeholder="dd/mm/yyyy"/></td></tr>; })}</tbody></table></div><div style={{ display:"flex", gap:6, marginBottom:11, flexWrap:"wrap" }}><button onClick={exportData} style={{ padding:"5px 10px", border:"1px solid #bfdbfe", borderRadius:5, background:"#eff6ff", color:"#1e40af", cursor:"pointer", fontSize:11, fontFamily:"inherit", fontWeight:600 }}>↓ Export Art. 20</button><button onClick={() => window.alert("Cancellazione limitata: obbligo conservazione 10 anni D.Lgs.229/1999")} style={{ padding:"5px 10px", border:"1px solid #fca5a5", borderRadius:5, background:"#fef2f2", color:"#dc2626", cursor:"pointer", fontSize:11, fontFamily:"inherit" }}>🗑 Art. 17*</button><span style={{ fontSize:10, color:"#94a3b8", alignSelf:"center" }}>Conservazione: {g.scadenzaRetenzione}</span></div><div style={{ background:"#fff", borderRadius:8, overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.06)" }}><div style={{ padding:"9px 13px", borderBottom:"1px solid #e2e8f0", background:"#f8fafc", display:"flex", justifyContent:"space-between" }}><span style={{ fontSize:12, fontWeight:600, color:"#0f172a" }}>Audit trail</span><span style={{ fontSize:10, color:"#94a3b8" }}>{(patient.auditLog||[]).length} operazioni</span></div><div style={{ maxHeight:160, overflowY:"auto" }}>{(patient.auditLog||[]).slice().reverse().map((e,i) => <div key={e.id||i} style={{ padding:"7px 13px", borderBottom:"1px solid #f1f5f9", display:"flex", gap:10 }}><span style={{ fontSize:9, color:"#94a3b8", fontFamily:"monospace", whiteSpace:"nowrap", minWidth:108 }}>{e.ts}</span><div><div style={{ fontSize:11, fontWeight:600, color:"#0f172a" }}>{e.azione}</div>{e.dettaglio&&<div style={{ fontSize:10, color:"#64748b", marginTop:1 }}>{e.dettaglio}</div>}</div></div>)}{!(patient.auditLog||[]).length&&<div style={{ padding:16, textAlign:"center", color:"#94a3b8", fontSize:11 }}>Nessuna operazione</div>}</div></div></div>;
 }
 
+// ─── BUSINESS MONITOR ─────────────────────────────────────────────────────────
+function BusinessMonitor({ patients, onSelectPatient }) {
+  const totPiani     = patients.reduce((s,p) => s + p.planValue, 0);
+  const totFatturato = patients.reduce((s,p) => s + p.invoiced, 0);
+  const totResiduo   = totPiani - totFatturato;
+  const totPagamenti = patients.reduce((s,p) => s + ((p.pagamenti||{}).pagamenti||[]).reduce((x,pg) => x + (+pg.importo||0), 0), 0);
+
+  const pazientiPerStato = [
+    { label:"Critici 🔴",  val:patients.filter(p=>p.status==="rosso").length,   color:"#ef4444" },
+    { label:"Attenzione 🟠",val:patients.filter(p=>p.status==="arancio").length, color:"#f59e0b" },
+    { label:"On track 🟢", val:patients.filter(p=>p.status==="verde").length,    color:"#10b981" },
+  ];
+
+  const clinici = [...new Set(patients.map(p => p.clinician))];
+  const pazientiPerClinco = clinici.map(c => ({
+    label: c,
+    val: patients.filter(p => p.clinician === c).length,
+    residuo: patients.filter(p => p.clinician === c).reduce((s,p) => s + (p.planValue - p.invoiced), 0),
+  }));
+
+  const discCount = {};
+  patients.forEach(p => (p.disciplines||[]).forEach(d => {
+    if (d.status === "in-corso") discCount[d.name] = (discCount[d.name]||0) + 1;
+  }));
+  const topDisc = Object.entries(discCount).sort((a,b)=>b[1]-a[1]).slice(0,6);
+
+  const alertsPerLiv = [
+    { label:"🔴 Rossi",   val:patients.reduce((s,p) => s+(p.alerts||[]).filter(a=>a.open&&a.level==="rosso").length,0),   color:"#ef4444" },
+    { label:"🟠 Arancio", val:patients.reduce((s,p) => s+(p.alerts||[]).filter(a=>a.open&&a.level==="arancio").length,0), color:"#f59e0b" },
+    { label:"🟡 Gialli",  val:patients.reduce((s,p) => s+(p.alerts||[]).filter(a=>a.open&&a.level==="giallo").length,0),  color:"#d97706" },
+  ];
+
+  const percRiscossione = totPiani > 0 ? Math.round(totFatturato / totPiani * 100) : 0;
+
+  function BarChart({ data, colorKey }) {
+    const max = Math.max(...data.map(d => d.val), 1);
+    return (
+      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+        {data.map((d,i) => (
+          <div key={i}>
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#475569", marginBottom:3 }}>
+              <span>{d.label}</span>
+              <span style={{ fontWeight:700, color: d.color || colorKey }}>{d.val}</span>
+            </div>
+            <div style={{ height:8, background:"#f1f5f9", borderRadius:4 }}>
+              <div style={{ height:"100%", width:`${(d.val/max)*100}%`, background: d.color || colorKey, borderRadius:4, minWidth: d.val>0?4:0 }}/>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function exportReport() {
+    const lines = [
+      "INNOVA CLINIQUE — REPORT BUSINESS",
+      `Data: ${getToday()}`,
+      "",
+      "── KPI FINANZIARI ──",
+      `Valore piani totale: €${totPiani.toLocaleString()}`,
+      `Fatturato totale: €${totFatturato.toLocaleString()}`,
+      `Residuo da incassare: €${totResiduo.toLocaleString()}`,
+      `% riscossione: ${percRiscossione}%`,
+      "",
+      "── PAZIENTI PER STATO ──",
+      ...pazientiPerStato.map(x => `${x.label}: ${x.val}`),
+      "",
+      "── PER CLINICO ──",
+      ...pazientiPerClinco.map(x => `${x.label}: ${x.val} pazienti | residuo €${x.residuo.toLocaleString()}`),
+      "",
+      "── DISCIPLINE IN CORSO (TOP) ──",
+      ...topDisc.map(([d,n]) => `${d}: ${n} pazienti`),
+      "",
+      "── ALERT APERTI ──",
+      ...alertsPerLiv.map(x => `${x.label}: ${x.val}`),
+    ];
+    const blob = new Blob([lines.join("\n")], { type:"text/plain" });
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = u; a.download = `innova_report_${getToday().replace(/\//g,"-")}.txt`; a.click();
+    URL.revokeObjectURL(u);
+  }
+
+  const card = (children, extraStyle) => (
+    <div style={{ background:"#fff", borderRadius:9, padding:"14px 16px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", ...extraStyle }}>
+      {children}
+    </div>
+  );
+
+  const cardTitle = (t) => <div style={{ fontSize:11, fontWeight:700, color:"#475569", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:12 }}>{t}</div>;
+
+  return (
+    <div>
+      {/* KPI row */}
+      <div style={{ display:"flex", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+        {[
+          ["Valore piani",    `€${(totPiani/1000).toFixed(1)}k`,      "#0f172a"],
+          ["Fatturato",       `€${(totFatturato/1000).toFixed(1)}k`,  "#10b981"],
+          ["Residuo",         `€${(totResiduo/1000).toFixed(1)}k`,    totResiduo>0?"#ef4444":"#10b981"],
+          ["% Riscossione",   `${percRiscossione}%`,                   percRiscossione>=70?"#10b981":percRiscossione>=40?"#f59e0b":"#ef4444"],
+          ["Pazienti attivi", patients.length,                         "#0f172a"],
+          ["Alert aperti",    patients.reduce((s,p)=>s+(p.alerts||[]).filter(a=>a.open).length,0), "#f59e0b"],
+        ].map(([lab,val,c]) => (
+          <div key={lab} style={{ background:"#fff", borderRadius:8, padding:"10px 14px", boxShadow:"0 1px 3px rgba(0,0,0,0.06)", flex:1, minWidth:100 }}>
+            <div style={{ fontSize:9, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:2 }}>{lab}</div>
+            <div style={{ fontSize:18, fontWeight:700, color:c }}>{val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Barra riscossione */}
+      {card(<>
+        {cardTitle("Avanzamento riscossione globale")}
+        <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#64748b", marginBottom:6 }}>
+          <span>Fatturato <b style={{ color:"#10b981" }}>€{totFatturato.toLocaleString()}</b></span>
+          <span>Residuo <b style={{ color:"#ef4444" }}>€{totResiduo.toLocaleString()}</b></span>
+          <span>Totale <b style={{ color:"#0f172a" }}>€{totPiani.toLocaleString()}</b></span>
+        </div>
+        <div style={{ height:12, background:"#f1f5f9", borderRadius:6, overflow:"hidden" }}>
+          <div style={{ height:"100%", width:`${percRiscossione}%`, background:"#10b981", borderRadius:6 }}/>
+        </div>
+        <div style={{ textAlign:"center", fontSize:11, fontWeight:700, color:"#10b981", marginTop:6 }}>{percRiscossione}% riscosso</div>
+      </>, { marginBottom:14 })}
+
+      {/* Grafici a barre */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+        {card(<>
+          {cardTitle("Pazienti per stato")}
+          <BarChart data={pazientiPerStato}/>
+        </>)}
+        {card(<>
+          {cardTitle("Alert aperti per livello")}
+          <BarChart data={alertsPerLiv}/>
+        </>)}
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+        {card(<>
+          {cardTitle("Discipline in corso (top)")}
+          {topDisc.length === 0
+            ? <div style={{ color:"#94a3b8", fontSize:11 }}>Nessuna disciplina in corso.</div>
+            : <BarChart data={topDisc.map(([d,n]) => ({ label:d, val:n, color:"#3b82f6" }))}/>
+          }
+        </>)}
+        {card(<>
+          {cardTitle("Per clinico — pazienti e residuo")}
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {pazientiPerClinco.map((c,i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 10px", background:"#f8fafc", borderRadius:6 }}>
+                <div>
+                  <div style={{ fontSize:11, fontWeight:600, color:"#0f172a" }}>{c.label}</div>
+                  <div style={{ fontSize:10, color:"#64748b" }}>{c.val} pazienti</div>
+                </div>
+                <div style={{ fontSize:12, fontWeight:700, color: c.residuo > 0 ? "#ef4444" : "#10b981" }}>
+                  €{c.residuo.toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>)}
+      </div>
+
+      {/* Top residui */}
+      {card(<>
+        {cardTitle("Pazienti con maggior residuo")}
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr style={{ background:"#f8fafc" }}>{["Paziente","Clinico","Piano","Fatturato","Residuo","Stato",""].map(h => <th key={h} style={{ padding:"6px 10px", textAlign:"left", fontSize:9, fontWeight:600, color:"#475569", textTransform:"uppercase", borderBottom:"1px solid #e2e8f0" }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {patients.slice().sort((a,b) => (b.planValue-b.invoiced)-(a.planValue-a.invoiced)).slice(0,5).map((p,i) => {
+              const res = p.planValue - p.invoiced;
+              const s = SEM[p.status];
+              return (
+                <tr key={p.id} style={{ borderBottom:"1px solid #f1f5f9", background:i%2===0?"#fff":"#fafbfc", cursor:"pointer" }} onClick={() => onSelectPatient(p)}>
+                  <td style={{ padding:"8px 10px", fontSize:12, fontWeight:600, color:"#0f172a" }}>{p.name}</td>
+                  <td style={{ padding:"8px 10px", fontSize:11, color:"#64748b" }}>{p.clinician}</td>
+                  <td style={{ padding:"8px 10px", fontSize:11, color:"#0f172a" }}>€{p.planValue.toLocaleString()}</td>
+                  <td style={{ padding:"8px 10px", fontSize:11, color:"#10b981" }}>€{p.invoiced.toLocaleString()}</td>
+                  <td style={{ padding:"8px 10px", fontSize:12, fontWeight:700, color:res>0?"#ef4444":"#10b981" }}>€{res.toLocaleString()}</td>
+                  <td style={{ padding:"8px 10px" }}><span style={{ padding:"2px 7px", borderRadius:8, fontSize:10, fontWeight:600, background:s.bg, color:s.color }}>{s.label}</span></td>
+                  <td style={{ padding:"8px 10px", fontSize:11, color:"#3b82f6", fontWeight:600 }}>→</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </>, { marginBottom:14 })}
+
+      {/* Export */}
+      <div style={{ display:"flex", justifyContent:"flex-end" }}>
+        <button onClick={exportReport} style={{ padding:"8px 16px", border:"1px solid #bfdbfe", borderRadius:7, background:"#eff6ff", color:"#1e40af", cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:"inherit" }}>
+          ↓ Esporta report .txt
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PrivacyBanner({ onAccept }) {
   return <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.92)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:999, padding:14 }}><div style={{ background:"#fff", borderRadius:10, maxWidth:520, width:"100%", overflow:"hidden", maxHeight:"88vh", overflowY:"auto" }}><div style={{ background:"#1e40af", padding:"14px 20px" }}><div style={{ fontSize:9, color:"#93c5fd", textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:2 }}>Innova Clinique · Domodossola</div><div style={{ fontSize:14, color:"#fff", fontWeight:700 }}>Informativa trattamento dati personali</div><div style={{ fontSize:9, color:"#bfdbfe", marginTop:2 }}>Art. 13 GDPR 679/2016 · D.Lgs. 196/2003</div></div><div style={{ padding:"14px 20px", display:"flex", flexDirection:"column", gap:8 }}>{[["Titolare","Innova Clinique S.r.l. · Domodossola (VCO)"],["Finalità","Gestione clinica (Art.9 lett.h) · Contratto (Art.6 lett.b) · Obblighi legali (Art.6 lett.c) · Consenso (Art.6 lett.a)"],["Conservazione","Cartella clinica: 10 anni (D.Lgs.229/1999)"],["Diritti","Art.15 Accesso · Art.16 Rettifica · Art.17 Cancellazione* · Art.20 Portabilità · Art.21 Opposizione"]].map(([t,tx]) => <div key={t}><div style={{ fontSize:9, fontWeight:700, color:"#1e40af", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:1 }}>{t}</div><div style={{ fontSize:11, color:"#374151", lineHeight:1.5 }}>{tx}</div></div>)}</div><div style={{ padding:"12px 20px", borderTop:"1px solid #e2e8f0", background:"#f8fafc" }}><button onClick={onAccept} style={{ width:"100%", padding:"10px", background:"#1e40af", color:"#fff", border:"none", borderRadius:7, fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>Ho letto e confermo — Accedi</button></div></div></div>;
 }
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function App() {
+// ─── LOGIN SCREEN ─────────────────────────────────────────────────────────────
+// ─── UTENTI SISTEMA ───────────────────────────────────────────────────────────
+const USERS = [
+  { email:"stefanoromeggio@innovaclinique.it", password:"Innova2026!", ruolo:"Direttore Sanitario" },
+  { email:"mara.micotti@innovaclinique.it",    password:"Innova2026!", ruolo:"CEO" },
+  { email:"segreteria@innovaclinique.it",      password:"Innova2026!", ruolo:"Segreteria" },
+];
+
+function LoginScreen({ onLogin }) {
+  const [email,    setEmail]    = useState("");
+  const [password, setPassword] = useState("");
+  const [error,    setError]    = useState("");
+
+  function handleLogin(e) {
+    e.preventDefault();
+    const user = USERS.find(u => u.email === email.trim() && u.password === password);
+    if (user) { onLogin({ email: user.email, ruolo: user.ruolo }); }
+    else { setError("Email o password non corretti."); }
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#0f172a", display:"flex", alignItems:"center", justifyContent:"center", padding:16, fontFamily:"'DM Sans',system-ui,sans-serif" }}>
+      <div style={{ width:"100%", maxWidth:400 }}>
+        {/* Logo */}
+        <div style={{ textAlign:"center", marginBottom:32 }}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#60a5fa", letterSpacing:"0.15em", textTransform:"uppercase", marginBottom:6 }}>Innova Clinique</div>
+          <div style={{ fontSize:24, fontWeight:700, color:"#f1f5f9" }}>Cruscotto 360°</div>
+          <div style={{ fontSize:12, color:"#475569", marginTop:6 }}>Domodossola · Accesso riservato agli operatori</div>
+        </div>
+
+        {/* Card */}
+        <div style={{ background:"#1e293b", borderRadius:12, padding:"28px 28px 24px", boxShadow:"0 24px 64px rgba(0,0,0,0.4)", border:"1px solid #334155" }}>
+          <div style={{ fontSize:14, fontWeight:600, color:"#e2e8f0", marginBottom:20 }}>Accedi al sistema</div>
+
+          <form onSubmit={handleLogin}>
+            <div style={{ marginBottom:14 }}>
+              <label style={{ display:"block", fontSize:11, fontWeight:600, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:5 }}>Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="nome@innovaclinique.it"
+                autoFocus
+                style={{ width:"100%", padding:"10px 12px", fontSize:13, background:"#0f172a", border:"1px solid #334155", borderRadius:7, color:"#f1f5f9", outline:"none", fontFamily:"inherit", boxSizing:"border-box" }}
+                onFocus={e => e.target.style.borderColor="#3b82f6"}
+                onBlur={e => e.target.style.borderColor="#334155"}
+              />
+            </div>
+
+            <div style={{ marginBottom:20 }}>
+              <label style={{ display:"block", fontSize:11, fontWeight:600, color:"#94a3b8", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:5 }}>Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                style={{ width:"100%", padding:"10px 12px", fontSize:13, background:"#0f172a", border:"1px solid #334155", borderRadius:7, color:"#f1f5f9", outline:"none", fontFamily:"inherit", boxSizing:"border-box" }}
+                onFocus={e => e.target.style.borderColor="#3b82f6"}
+                onBlur={e => e.target.style.borderColor="#334155"}
+              />
+            </div>
+
+            {error && (
+              <div style={{ background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:6, padding:"8px 12px", fontSize:12, color:"#991b1b", marginBottom:14 }}>
+                ⚠ {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={!email.trim() || !password.trim()}
+              style={{ width:"100%", padding:"11px", background:"#1e40af", color:"#fff", border:"none", borderRadius:7, fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}
+            >
+              Accedi
+            </button>
+          </form>
+        </div>
+
+        <div style={{ textAlign:"center", marginTop:16, fontSize:10, color:"#334155" }}>
+          Art. 13 GDPR 679/2016 · Accesso tracciato · Dati sanitari categoria speciale Art. 9
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
+export default function Root() {
+  const [session, setSession] = useState(null);
+  function handleLogin(user) { setSession(user); }
+  function handleLogout() { setSession(null); }
+  if (!session) return <LoginScreen onLogin={handleLogin}/>;
+  return <App session={session} onLogout={handleLogout}/>;
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+function App({ session, onLogout }) {
   const [patients,   setPatients]   = useState([]);
   const [sel,        setSel]        = useState(null);
   const [view,       setView]       = useState("paziente");
@@ -525,35 +819,58 @@ export default function App() {
   const [stStatus,   setStStatus]   = useState("loading");
   const [showBanner, setShowBanner] = useState(false);
   const [chatOpen,   setChatOpen]   = useState(false);
+
+  async function logout() { onLogout(); }
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("tutti");
   const [filterExtra, setFilterExtra] = useState("tutti"); // tutti | alert | gdpr | noappt
 
   useEffect(() => {
-    try {
-      const b = storage.get(BANNER_KEY);
-      if (!b) setShowBanner(true);
-      const p = storage.get(STORAGE_KEY);
-      if (p && p.value) {
-        const d = JSON.parse(p.value);
-        setPatients(d);
-        setSel(d.find(x => x.status === "rosso") || d[0] || null);
-      } else {
-        setPatients(SEED);
-        setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
-        storage.set(STORAGE_KEY, JSON.stringify(SEED));
+    (async () => {
+      try {
+        const b = storage.get(BANNER_KEY);
+        if (!b) setShowBanner(true);
+        // Load from Supabase
+        const { data, error } = await supabase
+          .from('patients')
+          .select('data')
+          .eq('id', 'innova-clinique')
+          .single();
+        if (data && data.data) {
+          const d = data.data;
+          setPatients(d);
+          setSel(d.find(x => x.status === "rosso") || d[0] || null);
+        } else {
+          // First time — seed data
+          setPatients(SEED);
+          setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
+          await supabase.from('patients').upsert({ id:'innova-clinique', data:SEED });
+        }
+      } catch (e) {
+        // Fallback to localStorage
+        const p = storage.get(STORAGE_KEY);
+        if (p && p.value) {
+          const d = JSON.parse(p.value);
+          setPatients(d); setSel(d.find(x => x.status === "rosso") || d[0] || null);
+        } else {
+          setPatients(SEED); setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
+        }
       }
-    } catch (e) {
-      setPatients(SEED);
-      setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
-    }
-    setStStatus("idle");
+      setStStatus("idle");
+    })();
   }, []);
 
-  const persist = useCallback(data => {
+  const persist = useCallback(async data => {
     setStStatus("saving");
-    try { storage.set(STORAGE_KEY, JSON.stringify(data)); setStStatus("saved"); setTimeout(() => setStStatus("idle"), 2000); }
-    catch (e) { setStStatus("error"); }
+    try {
+      await supabase.from('patients').upsert({ id:'innova-clinique', data, updated_at: new Date().toISOString() });
+      storage.set(STORAGE_KEY, JSON.stringify(data)); // backup locale
+      setStStatus("saved");
+      setTimeout(() => setStStatus("idle"), 2000);
+    } catch (e) {
+      storage.set(STORAGE_KEY, JSON.stringify(data));
+      setStStatus("error");
+    }
   }, []);
 
   const commit = useCallback((list, ns) => { setPatients(list); if (ns !== undefined) setSel(ns); persist(list); }, [persist]);
@@ -620,13 +937,20 @@ export default function App() {
         <div style={{ padding:"13px 13px 8px", borderBottom:"1px solid #1e293b" }}>
           <div style={{ fontSize:10, fontWeight:700, color:"#60a5fa", letterSpacing:"0.1em", textTransform:"uppercase" }}>Innova Clinique</div>
           <div style={{ fontSize:11, fontWeight:600, color:"#e2e8f0", marginTop:1 }}>Cruscotto 360°</div>
-          <div style={{ marginTop:3, display:"flex", justifyContent:"space-between", alignItems:"center" }}><span style={{ fontSize:9, color:stColor }}>{stLabel}</span><button onClick={resetStorage} style={{ background:"none", border:"none", fontSize:8, color:"#334155", cursor:"pointer", fontFamily:"inherit", padding:0 }}>reset</button></div>
+          <div style={{ marginTop:3, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <span style={{ fontSize:9, color:stColor }}>{stLabel}</span>
+            <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+              <span style={{ fontSize:8, color:"#475569", maxWidth:80, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{session.email}</span>
+              <button onClick={logout} title="Esci" style={{ background:"none", border:"none", fontSize:9, color:"#ef4444", cursor:"pointer", fontFamily:"inherit", padding:0 }}>⏻</button>
+              <button onClick={resetStorage} style={{ background:"none", border:"none", fontSize:8, color:"#334155", cursor:"pointer", fontFamily:"inherit", padding:0 }}>reset</button>
+            </div>
+          </div>
         </div>
         <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", borderBottom:"1px solid #1e293b" }}>
           {[{l:"Attivi",v:patients.length,c:"#e2e8f0"},{l:"🔴",v:critPts,c:"#ef4444"},{l:"Alert",v:totalRed,c:"#f59e0b"},{l:"GDPR",v:missCons,c:missCons>0?"#ef4444":"#10b981"}].map(s => <div key={s.l} style={{ padding:"7px 0", textAlign:"center", borderRight:"1px solid #1e293b" }}><div style={{ fontSize:13, fontWeight:700, color:s.c }}>{s.v}</div><div style={{ fontSize:7, color:"#475569", textTransform:"uppercase", letterSpacing:"0.04em" }}>{s.l}</div></div>)}
         </div>
         <div style={{ padding:"6px 8px", borderBottom:"1px solid #1e293b", display:"flex", flexDirection:"column", gap:4 }}>
-          {[["📊","Panoramica","panoramica"],["🔒","GDPR","gdpr-view"]].map(([ic,lab,vid]) => <button key={lab} onClick={() => setView(vid)} style={{ width:"100%", padding:"5px 8px", background:view===vid?"#0f4c81":"#1e293b", color:view===vid?"#93c5fd":"#94a3b8", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}><span style={{ fontSize:12 }}>{ic}</span>{lab}</button>)}
+          {[["📊","Panoramica","panoramica"],["📈","Business Monitor","business"],["🔒","GDPR","gdpr-view"]].map(([ic,lab,vid]) => <button key={lab} onClick={() => setView(vid)} style={{ width:"100%", padding:"5px 8px", background:view===vid?"#0f4c81":"#1e293b", color:view===vid?"#93c5fd":"#94a3b8", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}><span style={{ fontSize:12 }}>{ic}</span>{lab}</button>)}
           <button onClick={() => setModal("new-patient")} style={{ width:"100%", padding:"5px", background:"#1e40af", color:"#fff", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>+ Nuovo paziente</button>
           <button onClick={() => setChatOpen(o => !o)} style={{ width:"100%", padding:"5px 8px", background:chatOpen?"#7c3aed":"#1e293b", color:chatOpen?"#fff":"#94a3b8", border:`1px solid ${chatOpen?"#7c3aed":"#334155"}`, borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -729,6 +1053,16 @@ export default function App() {
               <tbody>{patients.slice().sort((a,b)=>({rosso:0,arancio:1,verde:2})[a.status]-({rosso:0,arancio:1,verde:2})[b.status]).map((p,i) => { const s=SEM[p.status]; const oA=(p.alerts||[]).filter(a=>a.open); const rA=oA.filter(a=>a.level==="rosso").length; return <tr key={p.id} style={{ borderBottom:"1px solid #f1f5f9", background:i%2===0?"#fff":"#fafbfc", cursor:"pointer" }} onClick={() => { setSel(p); setView("paziente"); setTab("timeline"); }}><td style={{ padding:"8px 10px" }}><div style={{ display:"flex", alignItems:"center", gap:4 }}><div style={{ width:7, height:7, borderRadius:"50%", background:s.color }}/><span style={{ fontSize:10, fontWeight:600, color:s.color }}>{s.label}</span></div></td><td style={{ padding:"8px 10px", fontSize:12, fontWeight:600, color:"#0f172a" }}>{p.name}</td><td style={{ padding:"8px 10px", fontSize:11, color:"#475569", maxWidth:110 }}><div style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{p.currentPhase}</div></td><td style={{ padding:"8px 10px" }}>{rA>0?<span style={{ padding:"1px 5px", borderRadius:5, fontSize:10, fontWeight:700, background:"#fee2e2", color:"#ef4444" }}>🔴{rA}</span>:oA.length>0?<span style={{ fontSize:10, color:"#f59e0b" }}>🟠{oA.length}</span>:<span style={{ fontSize:10, color:"#10b981" }}>✓</span>}</td><td style={{ padding:"8px 10px", fontSize:11, fontWeight:600, color:(p.planValue-p.invoiced)>5000?"#dc2626":"#0f172a" }}>€{(p.planValue-p.invoiced).toLocaleString()}</td><td style={{ padding:"8px 10px", fontSize:11, color:p.nextVisit==="Non fissata"?"#ef4444":"#0f172a" }}>{p.nextVisit==="Non fissata"?"⚠ —":p.nextVisit||"—"}</td><td style={{ padding:"8px 10px", fontSize:11, color:"#3b82f6", fontWeight:600 }}>→</td></tr>; })}</tbody>
               </table>
             </div>
+          </div>
+        </React.Fragment>}
+
+        {view==="business" && <React.Fragment>
+          <div style={{ background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <h1 style={{ margin:0, fontSize:15, fontWeight:700, color:"#0f172a" }}>📈 Business Monitor</h1>
+            <ChatBtn/>
+          </div>
+          <div style={{ overflowY:"auto", padding:14, flex:1 }}>
+            <BusinessMonitor patients={patients} onSelectPatient={(p) => { setSel(p); setView("paziente"); setTab("timeline"); }}/>
           </div>
         </React.Fragment>}
 
