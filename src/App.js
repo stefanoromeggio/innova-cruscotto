@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from './supabase';
+import { dbGet, dbUpsert } from './supabase';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const STORAGE_KEY = "innova_v4";
@@ -829,13 +829,9 @@ function App({ session, onLogout }) {
       try {
         const b = storage.get(BANNER_KEY);
         if (!b) setShowBanner(true);
-        const { data, error: sbError } = await supabase
-          .from('patients')
-          .select('data')
-          .eq('id', 'innova-clinique')
-          .maybeSingle();
+        const { data, error: sbError } = await dbGet();
         if (sbError) {
-          console.error('Supabase load error:', sbError.message, sbError.code);
+          console.error('DB load error:', sbError.message || sbError);
           setStStatus("error_sb");
         }
         if (data && data.data) {
@@ -846,9 +842,9 @@ function App({ session, onLogout }) {
         } else if (!sbError) {
           setPatients(SEED);
           setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
-          const { error: upsertErr } = await supabase.from('patients').upsert({ id:'innova-clinique', data:SEED });
-          if (upsertErr) console.error('Supabase upsert error:', upsertErr.message);
-          else console.log('Supabase — seed inserito');
+          const { error: upsertErr } = await dbUpsert({ id:'innova-clinique', data:SEED });
+          if (upsertErr) console.error('DB upsert error:', upsertErr);
+          else console.log('DB — seed inserito');
         }
       } catch (e) {
         console.error('Supabase exception:', e.message);
@@ -867,7 +863,7 @@ function App({ session, onLogout }) {
   const persist = useCallback(async data => {
     setStStatus("saving");
     try {
-      await supabase.from('patients').upsert({ id:'innova-clinique', data, updated_at: new Date().toISOString() });
+      await dbUpsert({ id:'innova-clinique', data, updated_at: new Date().toISOString() });
       storage.set(STORAGE_KEY, JSON.stringify(data)); // backup locale
       setStStatus("saved");
       setTimeout(() => setStStatus("idle"), 2000);
