@@ -514,7 +514,6 @@ function BusinessMonitor({ patients, onSelectPatient }) {
   const totPiani     = patients.reduce((s,p) => s + p.planValue, 0);
   const totFatturato = patients.reduce((s,p) => s + p.invoiced, 0);
   const totResiduo   = totPiani - totFatturato;
-  const totPagamenti = patients.reduce((s,p) => s + ((p.pagamenti||{}).pagamenti||[]).reduce((x,pg) => x + (+pg.importo||0), 0), 0);
 
   const pazientiPerStato = [
     { label:"Critici 🔴",  val:patients.filter(p=>p.status==="rosso").length,   color:"#ef4444" },
@@ -830,24 +829,29 @@ function App({ session, onLogout }) {
       try {
         const b = storage.get(BANNER_KEY);
         if (!b) setShowBanner(true);
-        // Load from Supabase
-        const { data, error } = await supabase
+        const { data, error: sbError } = await supabase
           .from('patients')
           .select('data')
           .eq('id', 'innova-clinique')
           .single();
+        if (sbError) {
+          console.error('Supabase load error:', sbError.message, sbError.code);
+          setStStatus("error_sb");
+        }
         if (data && data.data) {
           const d = data.data;
           setPatients(d);
           setSel(d.find(x => x.status === "rosso") || d[0] || null);
-        } else {
-          // First time — seed data
+          console.log('Supabase OK — pazienti caricati:', d.length);
+        } else if (!sbError) {
           setPatients(SEED);
           setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
-          await supabase.from('patients').upsert({ id:'innova-clinique', data:SEED });
+          const { error: upsertErr } = await supabase.from('patients').upsert({ id:'innova-clinique', data:SEED });
+          if (upsertErr) console.error('Supabase upsert error:', upsertErr.message);
+          else console.log('Supabase — seed inserito');
         }
       } catch (e) {
-        // Fallback to localStorage
+        console.error('Supabase exception:', e.message);
         const p = storage.get(STORAGE_KEY);
         if (p && p.value) {
           const d = JSON.parse(p.value);
