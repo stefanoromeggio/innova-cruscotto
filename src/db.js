@@ -1,11 +1,35 @@
-const SUPABASE_URL = 'https://lbqqonocwaxpezhjuwe.supabase.co';
+const https = require('https');
+
+const SUPABASE_HOST = 'lbqqonocwaxpezhjuwe.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxicXFvbm9jd2F4cGV6aGppdXdlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxMzA3ODcsImV4cCI6MjA4OTcwNjc4N30.9WeFufSUgP_jxqt9Toyre1zEHDLhkjjIwEGYAeT2qYc';
 
-const SB_HEADERS = {
-  'Content-Type': 'application/json',
-  'apikey': SUPABASE_KEY,
-  'Authorization': 'Bearer ' + SUPABASE_KEY,
-};
+function sbRequest(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const bodyStr = body ? JSON.stringify(body) : null;
+    const options = {
+      hostname: SUPABASE_HOST,
+      port: 443,
+      path: path,
+      method: method,
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Prefer': method === 'POST' ? 'resolution=merge-duplicates' : '',
+      },
+    };
+    if (bodyStr) options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body: data }));
+    });
+    req.on('error', reject);
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,11 +41,9 @@ module.exports = async function handler(req, res) {
 
   try {
     if (action === 'get') {
-      const url = SUPABASE_URL + '/rest/v1/patients?select=data&id=eq.innova-clinique';
-      const r = await fetch(url, { method: 'GET', headers: SB_HEADERS });
-      const text = await r.text();
-      if (!r.ok) { res.status(r.status).json({ error: text }); return; }
-      const rows = JSON.parse(text);
+      const r = await sbRequest('GET', '/rest/v1/patients?select=data&id=eq.innova-clinique');
+      if (r.status !== 200) { res.status(r.status).json({ error: r.body }); return; }
+      const rows = JSON.parse(r.body);
       res.status(200).json(rows[0] || null);
       return;
     }
@@ -29,14 +51,8 @@ module.exports = async function handler(req, res) {
     if (action === 'upsert') {
       let body = req.body;
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch(e) {} }
-      const url = SUPABASE_URL + '/rest/v1/patients';
-      const r = await fetch(url, {
-        method: 'POST',
-        headers: Object.assign({}, SB_HEADERS, { 'Prefer': 'resolution=merge-duplicates' }),
-        body: JSON.stringify(body),
-      });
-      const text = await r.text();
-      if (!r.ok) { res.status(r.status).json({ error: text }); return; }
+      const r = await sbRequest('POST', '/rest/v1/patients', body);
+      if (r.status >= 300) { res.status(r.status).json({ error: r.body }); return; }
       res.status(200).json({ ok: true });
       return;
     }
