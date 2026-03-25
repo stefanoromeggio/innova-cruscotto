@@ -1,8 +1,7 @@
 {
-  "rewrites": [
-    {
-      "source": "/sb-api/:path*",
-      "destination": "https://lbqqonocwaxpezhjuwe.supabase.co/:path*"
+  "functions": {
+    "api/db.js": {
+      "runtime": "nodejs18.x"
     }
-  ]
+  }
 }
