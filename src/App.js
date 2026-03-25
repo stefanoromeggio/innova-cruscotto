@@ -705,6 +705,557 @@ function BusinessMonitor({ patients, onSelectPatient }) {
   );
 }
 
+}
+
+// ─── PREVENTIVI MODULE ────────────────────────────────────────────────────────
+
+const PREV_STORAGE_KEY = "innova_preventivi_v1";
+
+const PREV_CONFIG = {
+  giorniValidita: 30,
+  giorniPrimoRecall: 3,
+  giorniAlertScadenza: 5,
+};
+
+const PREV_STATI = {
+  waiting_response:   { label:"In attesa",      color:"#3b82f6", bg:"#eff6ff",  icon:"⏳" },
+  pending_more_time:  { label:"Più tempo",       color:"#f59e0b", bg:"#fffbeb",  icon:"🕐" },
+  followup_scheduled: { label:"Follow-up prog.", color:"#8b5cf6", bg:"#f5f3ff",  icon:"📅" },
+  followup_due:       { label:"Follow-up scad.", color:"#f97316", bg:"#fff7ed",  icon:"⚠️" },
+  expiring_soon:      { label:"In scadenza",     color:"#f97316", bg:"#fff7ed",  icon:"🔔" },
+  expired:            { label:"Scaduto",         color:"#ef4444", bg:"#fef2f2",  icon:"❌" },
+  accepted:           { label:"Accettato",       color:"#10b981", bg:"#ecfdf5",  icon:"✅" },
+  refused:            { label:"Rifiutato",       color:"#64748b", bg:"#f8fafc",  icon:"🚫" },
+};
+
+const MOTIVI_RIFIUTO = ["Prezzo troppo alto","Ha scelto altro studio","Ha rimandato a data indefinita","Problemi personali/economici","Non interessato","Altro"];
+const TIPI_FOLLOWUP = ["Telefonata","WhatsApp","Email","Visita in studio","Recall interno"];
+const PREV_FILTRI = [
+  { id:"tutti",              label:"Tutti" },
+  { id:"attivi",             label:"In corso" },
+  { id:"followup_oggi",      label:"Follow-up oggi" },
+  { id:"followup_scaduti",   label:"Follow-up scaduti" },
+  { id:"expiring_soon",      label:"In scadenza" },
+  { id:"expired",            label:"Scaduti" },
+  { id:"accepted",           label:"Accettati" },
+  { id:"refused",            label:"Rifiutati" },
+];
+
+// ── Utility preventivi ────────────────────────────────────────────────────────
+function parseDMY(str) {
+  if (!str) return null;
+  const [d,m,y] = str.split('/'); return new Date(+y, +m-1, +d);
+}
+function addDays(str, n) {
+  const d = parseDMY(str); if (!d) return str;
+  d.setDate(d.getDate() + n);
+  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+}
+function daysDiff(str) {
+  const d = parseDMY(str); if (!d) return null;
+  return Math.round((d - new Date()) / 86400000);
+}
+function newPrevId(list) { return `PREV-${String((list||[]).length+1).padStart(3,'0')}`; }
+
+function calcolaStatoAuto(prev) {
+  if (prev.stato === "accepted" || prev.stato === "refused") return prev.stato;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const scad = parseDMY(prev.dataScadenza);
+  const diffScad = scad ? Math.round((scad - today) / 86400000) : null;
+  if (diffScad !== null && diffScad < 0) return "expired";
+  if (diffScad !== null && diffScad <= PREV_CONFIG.giorniAlertScadenza) return "expiring_soon";
+  if (prev.stato === "followup_scheduled" || prev.stato === "pending_more_time") {
+    const fu = prev.prossimFollowup ? parseDMY(prev.prossimFollowup) : null;
+    if (fu && fu < today) return "followup_due";
+    return prev.stato;
+  }
+  if (prev.stato === "waiting_response") {
+    const consegna = parseDMY(prev.dataConsegna);
+    if (consegna) {
+      const diffCons = Math.round((today - consegna) / 86400000);
+      if (diffCons >= PREV_CONFIG.giorniPrimoRecall) return "followup_due";
+    }
+  }
+  return prev.stato;
+}
+
+function aggiornaTuttiStati(list) {
+  return (list||[]).map(p => ({ ...p, stato: calcolaStatoAuto(p) }));
+}
+
+const PREV_SEED = [
+  {
+    id:"PREV-001", patientName:"Giovanni Bianchi", patientPhone:"+39 333 111 2222",
+    clinician:"Dr. Rossi", codice:"PC-2026-001",
+    dataConsegna: addDays(getToday(), -5), dataScadenza: addDays(getToday(), 25),
+    importoTotale:8500, opzioni:["Piano A — Impianti + Protesi €8500","Piano B — Solo protesi rimovibile €2800"],
+    opzioneAccettata:null, stato:"followup_due", motivoRifiuto:"", noteInterne:"Paziente molto interessato, ha chiesto tempo per valutare",
+    prossimFollowup: addDays(getToday(), -1), operatoreAssegnato:"segreteria@innovaclinique.it",
+    followups:[ {id:1, data: addDays(getToday(), -5), tipo:"Email", esito:"Preventivo inviato via email", operatore:"Segreteria", completato:true} ],
+    tasks:[ {id:1, tipo:"Primo recall", dataScadenza: addDays(getToday(), -2), priorita:"alta", stato:"pending", origine:"auto"} ],
+    auditLog:[ {ts: addDays(getToday(), -5)+" 10:00", azione:"Preventivo consegnato", statoPrec:"-", statoNuovo:"waiting_response", operatore:"Segreteria"} ],
+    createdAt: addDays(getToday(), -5), updatedAt: addDays(getToday(), -5),
+  },
+  {
+    id:"PREV-002", patientName:"Lucia Ferrero", patientPhone:"+39 347 555 6666",
+    clinician:"Dott.ssa Bianchi", codice:"PC-2026-002",
+    dataConsegna: addDays(getToday(), -2), dataScadenza: addDays(getToday(), 28),
+    importoTotale:3200, opzioni:[], opzioneAccettata:null,
+    stato:"waiting_response", motivoRifiuto:"", noteInterne:"",
+    prossimFollowup:null, operatoreAssegnato:"segreteria@innovaclinique.it",
+    followups:[], tasks:[], auditLog:[],
+    createdAt: addDays(getToday(), -2), updatedAt: addDays(getToday(), -2),
+  },
+  {
+    id:"PREV-003", patientName:"Mario Russo", patientPhone:"+39 320 777 8888",
+    clinician:"Dr. Rossi", codice:"PC-2026-003",
+    dataConsegna: addDays(getToday(), -28), dataScadenza: addDays(getToday(), 2),
+    importoTotale:12000, opzioni:[], opzioneAccettata:null,
+    stato:"expiring_soon", motivoRifiuto:"", noteInterne:"Sta raccogliendo più preventivi",
+    prossimFollowup: addDays(getToday(), 1), operatoreAssegnato:"segreteria@innovaclinique.it",
+    followups:[
+      {id:1, data: addDays(getToday(), -28), tipo:"Telefonata", esito:"Preventivo illustrato", operatore:"Segreteria", completato:true},
+      {id:2, data: addDays(getToday(), -14), tipo:"WhatsApp", esito:"Paziente sta valutando", operatore:"Segreteria", completato:true},
+    ],
+    tasks:[],
+    auditLog:[],
+    createdAt: addDays(getToday(), -28), updatedAt: addDays(getToday(), -14),
+  },
+];
+
+// ── Preventivo Form ───────────────────────────────────────────────────────────
+function PreventivoForm({ initial, onSave, onClose }) {
+  const isNew = !initial;
+  const blank = { patientName:"", patientPhone:"", clinician:CLINICIANS[0], codice:"", dataConsegna:getToday(), importoTotale:"", opzioni:"", noteInterne:"", operatoreAssegnato:"segreteria@innovaclinique.it" };
+  const [f, setF] = useState(initial ? { ...initial, opzioni:(initial.opzioni||[]).join("\n"), importoTotale:String(initial.importoTotale) } : blank);
+  const [err, setErr] = useState({});
+  function set(k,v) { setF(p=>({...p,[k]:v})); }
+
+  function submit() {
+    const e = {};
+    if (!f.patientName.trim()) e.patientName="Obbligatorio";
+    if (!f.importoTotale || isNaN(+f.importoTotale)) e.importoTotale="Non valido";
+    if (!f.dataConsegna) e.dataConsegna="Obbligatoria";
+    setErr(e);
+    if (Object.keys(e).length) return;
+
+    const dataScadenza = addDays(f.dataConsegna, PREV_CONFIG.giorniValidita);
+    const opzioni = f.opzioni.split('\n').map(o=>o.trim()).filter(Boolean);
+    const saved = {
+      ...(initial||{}),
+      patientName:f.patientName.trim(), patientPhone:f.patientPhone.trim(),
+      clinician:f.clinician, codice:f.codice.trim()||`PC-${Date.now()}`,
+      dataConsegna:f.dataConsegna, dataScadenza,
+      importoTotale:+f.importoTotale, opzioni,
+      opzioneAccettata:initial?.opzioneAccettata||null,
+      stato:initial?.stato||"waiting_response",
+      motivoRifiuto:initial?.motivoRifiuto||"",
+      noteInterne:f.noteInterne.trim(),
+      prossimFollowup:initial?.prossimFollowup||null,
+      operatoreAssegnato:f.operatoreAssegnato,
+      followups:initial?.followups||[],
+      tasks:initial?.tasks||[{ id:Date.now(), tipo:"Primo recall", dataScadenza:addDays(f.dataConsegna, PREV_CONFIG.giorniPrimoRecall), priorita:"alta", stato:"pending", origine:"auto" }],
+      auditLog:[...(initial?.auditLog||[]), {ts:getTodayFull(), azione:isNew?"Preventivo creato":"Preventivo modificato", statoPrec:initial?.stato||"-", statoNuovo:initial?.stato||"waiting_response", operatore:"Operatore"}],
+      createdAt:initial?.createdAt||getToday(),
+      updatedAt:getToday(),
+    };
+    onSave(saved);
+  }
+
+  return (
+    <div>
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+          <div><label style={labelStyle}>Nome paziente *</label><input value={f.patientName} onChange={e=>set("patientName",e.target.value)} style={{...inputStyle, borderColor:err.patientName?"#ef4444":"#e2e8f0"}} placeholder="Mario Rossi"/>{err.patientName&&<div style={{fontSize:10,color:"#ef4444",marginTop:2}}>{err.patientName}</div>}</div>
+          <div><label style={labelStyle}>Telefono</label><input value={f.patientPhone} onChange={e=>set("patientPhone",e.target.value)} style={inputStyle}/></div>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+          <div><label style={labelStyle}>Clinico</label><select value={f.clinician} onChange={e=>set("clinician",e.target.value)} style={inputStyle}>{CLINICIANS.map(c=><option key={c}>{c}</option>)}</select></div>
+          <div><label style={labelStyle}>Codice preventivo</label><input value={f.codice} onChange={e=>set("codice",e.target.value)} style={inputStyle} placeholder="PC-2026-001"/></div>
+          <div><label style={labelStyle}>Data consegna *</label><input value={f.dataConsegna} onChange={e=>set("dataConsegna",e.target.value)} style={{...inputStyle, borderColor:err.dataConsegna?"#ef4444":"#e2e8f0"}} placeholder="dd/mm/yyyy"/></div>
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+          <div><label style={labelStyle}>Importo totale € *</label><input type="number" value={f.importoTotale} onChange={e=>set("importoTotale",e.target.value)} style={{...inputStyle, borderColor:err.importoTotale?"#ef4444":"#e2e8f0"}}/>{err.importoTotale&&<div style={{fontSize:10,color:"#ef4444",marginTop:2}}>{err.importoTotale}</div>}</div>
+          <div><label style={labelStyle}>Operatore assegnato</label><input value={f.operatoreAssegnato} onChange={e=>set("operatoreAssegnato",e.target.value)} style={inputStyle}/></div>
+        </div>
+        <div><label style={labelStyle}>Opzioni piano (una per riga, lascia vuoto se unico piano)</label><textarea value={f.opzioni} onChange={e=>set("opzioni",e.target.value)} rows={3} style={{...inputStyle,resize:"vertical",minHeight:60}} placeholder={"Piano A — Impianti completi €8500\nPiano B — Solo protesi rimovibile €2800"}/></div>
+        <div><label style={labelStyle}>Note interne segreteria</label><textarea value={f.noteInterne} onChange={e=>set("noteInterne",e.target.value)} rows={2} style={{...inputStyle,resize:"vertical",minHeight:50}}/></div>
+        <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:5,padding:"6px 10px",fontSize:11,color:"#1e40af"}}>
+          Scadenza automatica: <b>{addDays(f.dataConsegna||getToday(), PREV_CONFIG.giorniValidita)}</b> · Primo recall automatico: <b>{addDays(f.dataConsegna||getToday(), PREV_CONFIG.giorniPrimoRecall)}</b>
+        </div>
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16,paddingTop:12,borderTop:"1px solid #e2e8f0"}}>
+        <button onClick={onClose} style={{padding:"6px 14px",border:"1px solid #e2e8f0",borderRadius:5,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Annulla</button>
+        <button onClick={submit} style={{padding:"6px 14px",border:"none",borderRadius:5,background:"#1e40af",color:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:600}}>{isNew?"Crea preventivo":"Salva modifiche"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Scheda dettaglio preventivo ───────────────────────────────────────────────
+function PreventivoDettaglio({ prev, onUpdate, onClose, onAccetta, onRifiuta, onSpostaInCruscotto }) {
+  const [showFollowupForm, setShowFollowupForm] = useState(false);
+  const [fuForm, setFuForm] = useState({ data:getToday(), tipo:"Telefonata", esito:"", note:"" });
+  const [showNuovaData, setShowNuovaData] = useState(false);
+  const [nuovaData, setNuovaData] = useState("");
+  const [showRifiuto, setShowRifiuto] = useState(false);
+  const [motivoRif, setMotivoRif] = useState(MOTIVI_RIFIUTO[0]);
+  const [showAccettazione, setShowAccettazione] = useState(false);
+  const [opzioneAcc, setOpzioneAcc] = useState(prev.opzioni[0]||"");
+
+  const s = PREV_STATI[prev.stato] || PREV_STATI.waiting_response;
+  const diff = daysDiff(prev.dataScadenza);
+  const isActive = !["accepted","refused"].includes(prev.stato);
+
+  function addFollowup() {
+    if (!fuForm.esito.trim()) return;
+    const updated = {
+      ...prev,
+      followups:[...(prev.followups||[]), {id:Date.now(), ...fuForm, operatore:"Operatore", completato:true}],
+      updatedAt:getToday(),
+      auditLog:[...(prev.auditLog||[]), {ts:getTodayFull(), azione:"Follow-up registrato", statoPrec:prev.stato, statoNuovo:prev.stato, operatore:"Operatore"}],
+    };
+    onUpdate(updated);
+    setFuForm({ data:getToday(), tipo:"Telefonata", esito:"", note:"" });
+    setShowFollowupForm(false);
+  }
+
+  function impostaNuovaData() {
+    if (!nuovaData) return;
+    const updated = {
+      ...prev,
+      stato:"followup_scheduled",
+      prossimFollowup:nuovaData,
+      updatedAt:getToday(),
+      tasks:[...(prev.tasks||[]), {id:Date.now(), tipo:"Follow-up programmato", dataScadenza:nuovaData, priorita:"media", stato:"pending", origine:"manuale"}],
+      auditLog:[...(prev.auditLog||[]), {ts:getTodayFull(), azione:"Nuova data follow-up", statoPrec:prev.stato, statoNuovo:"followup_scheduled", operatore:"Operatore"}],
+    };
+    onUpdate(updated);
+    setShowNuovaData(false);
+    setNuovaData("");
+  }
+
+  return (
+    <div>
+      {/* Header stato */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,padding:"10px 14px",background:s.bg,borderRadius:8,border:`1px solid ${s.color}33`}}>
+        <span style={{fontSize:18}}>{s.icon}</span>
+        <div style={{flex:1}}>
+          <div style={{fontSize:13,fontWeight:700,color:s.color}}>{s.label}</div>
+          <div style={{fontSize:11,color:"#64748b"}}>{prev.codice} · {prev.clinician} · €{prev.importoTotale.toLocaleString()}</div>
+        </div>
+        {diff !== null && isActive && (
+          <div style={{textAlign:"center",padding:"6px 12px",background:"#fff",borderRadius:6,border:"1px solid #e2e8f0"}}>
+            <div style={{fontSize:16,fontWeight:700,color:diff<0?"#ef4444":diff<=5?"#f97316":"#0f172a"}}>{diff<0?`${Math.abs(diff)}gg fa`:`${diff}gg`}</div>
+            <div style={{fontSize:9,color:"#94a3b8"}}>alla scadenza</div>
+          </div>
+        )}
+      </div>
+
+      {/* Info base */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+        {[["Consegna",prev.dataConsegna],["Scadenza",prev.dataScadenza],["Telefono",prev.patientPhone||"—"],["Prossimo follow-up",prev.prossimFollowup||"—"],["Operatore",prev.operatoreAssegnato],["Note",prev.noteInterne||"—"]].map(([k,v])=>(
+          <div key={k} style={{padding:"8px 10px",background:"#f8fafc",borderRadius:6}}>
+            <div style={{fontSize:9,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:2}}>{k}</div>
+            <div style={{fontSize:12,color:"#0f172a",fontWeight:500}}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Opzioni piano */}
+      {(prev.opzioni||[]).length > 0 && (
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>Opzioni preventivo</div>
+          <div style={{display:"flex",flexDirection:"column",gap:4}}>
+            {prev.opzioni.map((o,i)=>(
+              <div key={i} style={{padding:"6px 10px",background:prev.opzioneAccettata===o?"#d1fae5":"#f8fafc",border:`1px solid ${prev.opzioneAccettata===o?"#10b981":"#e2e8f0"}`,borderRadius:6,fontSize:12,color:prev.opzioneAccettata===o?"#065f46":"#0f172a"}}>
+                {prev.opzioneAccettata===o?"✓ ":""}{o}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Azioni rapide */}
+      {isActive && (
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,padding:"10px",background:"#f8fafc",borderRadius:8,border:"1px solid #e2e8f0"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#475569",width:"100%",marginBottom:4}}>AZIONI RAPIDE</div>
+          <button onClick={()=>setShowAccettazione(v=>!v)} style={{padding:"6px 12px",border:"1px solid #bbf7d0",borderRadius:6,background:"#f0fdf4",color:"#15803d",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>✅ Accetta</button>
+          <button onClick={()=>setShowRifiuto(v=>!v)} style={{padding:"6px 12px",border:"1px solid #e2e8f0",borderRadius:6,background:"#f8fafc",color:"#475569",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>🚫 Rifiuta</button>
+          <button onClick={()=>setShowNuovaData(v=>!v)} style={{padding:"6px 12px",border:"1px solid #fde68a",borderRadius:6,background:"#fffbeb",color:"#92400e",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>📅 Nuova data</button>
+          <button onClick={()=>setShowFollowupForm(v=>!v)} style={{padding:"6px 12px",border:"1px solid #bfdbfe",borderRadius:6,background:"#eff6ff",color:"#1e40af",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>📝 Registra follow-up</button>
+        </div>
+      )}
+
+      {/* Form accettazione */}
+      {showAccettazione && (
+        <div style={{marginBottom:12,padding:"12px",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#15803d",marginBottom:8}}>Conferma accettazione</div>
+          {(prev.opzioni||[]).length > 0 && (
+            <div style={{marginBottom:8}}>
+              <label style={labelStyle}>Opzione accettata</label>
+              <select value={opzioneAcc} onChange={e=>setOpzioneAcc(e.target.value)} style={inputStyle}>
+                {prev.opzioni.map(o=><option key={o}>{o}</option>)}
+              </select>
+            </div>
+          )}
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>onAccetta(prev, opzioneAcc)} style={{padding:"6px 14px",border:"none",borderRadius:5,background:"#10b981",color:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:600}}>Conferma ✅</button>
+            <button onClick={()=>setShowAccettazione(false)} style={{padding:"6px 14px",border:"1px solid #e2e8f0",borderRadius:5,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Annulla</button>
+          </div>
+        </div>
+      )}
+
+      {/* Form rifiuto */}
+      {showRifiuto && (
+        <div style={{marginBottom:12,padding:"12px",background:"#fef9f9",border:"1px solid #fca5a5",borderRadius:8}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#991b1b",marginBottom:8}}>Registra rifiuto</div>
+          <div style={{marginBottom:8}}>
+            <label style={labelStyle}>Motivo</label>
+            <select value={motivoRif} onChange={e=>setMotivoRif(e.target.value)} style={inputStyle}>{MOTIVI_RIFIUTO.map(m=><option key={m}>{m}</option>)}</select>
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>onRifiuta(prev, motivoRif)} style={{padding:"6px 14px",border:"none",borderRadius:5,background:"#ef4444",color:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:600}}>Conferma rifiuto</button>
+            <button onClick={()=>setShowRifiuto(false)} style={{padding:"6px 14px",border:"1px solid #e2e8f0",borderRadius:5,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Annulla</button>
+          </div>
+        </div>
+      )}
+
+      {/* Form nuova data */}
+      {showNuovaData && (
+        <div style={{marginBottom:12,padding:"12px",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#92400e",marginBottom:8}}>Imposta nuova data follow-up</div>
+          <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+            <div style={{flex:1}}><label style={labelStyle}>Data richiamo</label><input value={nuovaData} onChange={e=>setNuovaData(e.target.value)} style={inputStyle} placeholder="dd/mm/yyyy"/></div>
+            <button onClick={impostaNuovaData} style={{padding:"7px 14px",border:"none",borderRadius:5,background:"#f59e0b",color:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:600}}>Salva</button>
+            <button onClick={()=>setShowNuovaData(false)} style={{padding:"7px 10px",border:"1px solid #e2e8f0",borderRadius:5,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>✕</button>
+          </div>
+        </div>
+      )}
+
+      {/* Form follow-up */}
+      {showFollowupForm && (
+        <div style={{marginBottom:12,padding:"12px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8}}>
+          <div style={{fontSize:12,fontWeight:600,color:"#1e40af",marginBottom:8}}>Registra follow-up</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div><label style={labelStyle}>Data</label><input value={fuForm.data} onChange={e=>setFuForm(p=>({...p,data:e.target.value}))} style={inputStyle}/></div>
+            <div><label style={labelStyle}>Tipo</label><select value={fuForm.tipo} onChange={e=>setFuForm(p=>({...p,tipo:e.target.value}))} style={inputStyle}>{TIPI_FOLLOWUP.map(t=><option key={t}>{t}</option>)}</select></div>
+          </div>
+          <div style={{marginBottom:8}}><label style={labelStyle}>Esito / Note</label><textarea value={fuForm.esito} onChange={e=>setFuForm(p=>({...p,esito:e.target.value}))} rows={2} style={{...inputStyle,resize:"vertical"}}/></div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={addFollowup} style={{padding:"6px 14px",border:"none",borderRadius:5,background:"#1e40af",color:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:600}}>Salva follow-up</button>
+            <button onClick={()=>setShowFollowupForm(false)} style={{padding:"6px 10px",border:"1px solid #e2e8f0",borderRadius:5,background:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12}}>Annulla</button>
+          </div>
+        </div>
+      )}
+
+      {/* Sposta in cruscotto (se accettato) */}
+      {prev.stato === "accepted" && !prev.spostatoInCruscotto && (
+        <div style={{marginBottom:12,padding:"10px 14px",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:12,color:"#15803d",fontWeight:500}}>✅ Preventivo accettato — vuoi creare il paziente nel cruscotto clinico?</span>
+          <button onClick={()=>onSpostaInCruscotto(prev)} style={{padding:"6px 14px",border:"none",borderRadius:5,background:"#10b981",color:"#fff",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:600}}>→ Apri nel cruscotto</button>
+        </div>
+      )}
+
+      {/* Storico follow-up */}
+      {(prev.followups||[]).length > 0 && (
+        <div style={{marginBottom:14}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>Storico follow-up</div>
+          <div style={{background:"#fff",borderRadius:8,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+            {(prev.followups||[]).slice().reverse().map((f,i)=>(
+              <div key={f.id||i} style={{padding:"8px 12px",borderBottom:"1px solid #f1f5f9",display:"flex",gap:10}}>
+                <span style={{fontSize:9,color:"#94a3b8",fontFamily:"monospace",whiteSpace:"nowrap",minWidth:80}}>{f.data}</span>
+                <div>
+                  <div style={{fontSize:11,fontWeight:600,color:"#0f172a"}}>{f.tipo}</div>
+                  <div style={{fontSize:11,color:"#64748b"}}>{f.esito}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Audit trail */}
+      {(prev.auditLog||[]).length > 0 && (
+        <div>
+          <div style={{fontSize:10,fontWeight:700,color:"#475569",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>Audit trail</div>
+          <div style={{background:"#fff",borderRadius:8,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+            {(prev.auditLog||[]).slice().reverse().map((e,i)=>(
+              <div key={i} style={{padding:"7px 12px",borderBottom:"1px solid #f1f5f9",display:"flex",gap:10}}>
+                <span style={{fontSize:9,color:"#94a3b8",fontFamily:"monospace",whiteSpace:"nowrap",minWidth:108}}>{e.ts}</span>
+                <div>
+                  <div style={{fontSize:11,fontWeight:600,color:"#0f172a"}}>{e.azione}</div>
+                  <div style={{fontSize:10,color:"#64748b"}}>{e.statoPrec} → {e.statoNuovo}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Vista principale Preventivi ───────────────────────────────────────────────
+function PreventiviView({ preventivi, onUpdate, onNew, onAccetta, onRifiuta, onSpostaInCruscotto }) {
+  const [filtro, setFiltro] = useState("tutti");
+  const [selPrev, setSelPrev] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [editPrev, setEditPrev] = useState(null);
+
+  const today = getToday();
+
+  function applyFiltro(list) {
+    const d = new Date(); d.setHours(0,0,0,0);
+    return list.filter(p => {
+      if (filtro === "tutti") return true;
+      if (filtro === "attivi") return !["accepted","refused","expired"].includes(p.stato);
+      if (filtro === "followup_oggi") {
+        if (!p.prossimFollowup) return false;
+        const fu = parseDMY(p.prossimFollowup);
+        return fu && fu.toDateString() === d.toDateString();
+      }
+      if (filtro === "followup_scaduti") return p.stato === "followup_due";
+      if (filtro === "expiring_soon") return p.stato === "expiring_soon";
+      if (filtro === "expired") return p.stato === "expired";
+      if (filtro === "accepted") return p.stato === "accepted";
+      if (filtro === "refused") return p.stato === "refused";
+      return true;
+    });
+  }
+
+  const lista = applyFiltro(preventivi).sort((a,b) => {
+    const ord = {followup_due:0, expiring_soon:1, waiting_response:2, pending_more_time:3, followup_scheduled:4, expired:5, accepted:6, refused:7};
+    return (ord[a.stato]||99) - (ord[b.stato]||99);
+  });
+
+  // KPI
+  const attivi = preventivi.filter(p=>!["accepted","refused"].includes(p.stato));
+  const fuOggi = preventivi.filter(p=>{ if(!p.prossimFollowup) return false; const d2=new Date(); d2.setHours(0,0,0,0); const fu=parseDMY(p.prossimFollowup); return fu&&fu.toDateString()===d2.toDateString(); });
+  const inScad = preventivi.filter(p=>p.stato==="expiring_soon");
+  const scaduti = preventivi.filter(p=>p.stato==="expired");
+  const accettati = preventivi.filter(p=>p.stato==="accepted");
+  const tassoAcc = preventivi.filter(p=>["accepted","refused"].includes(p.stato)).length > 0
+    ? Math.round(accettati.length / preventivi.filter(p=>["accepted","refused"].includes(p.stato)).length * 100) : 0;
+
+  if (selPrev) {
+    return (
+      <React.Fragment>
+        <div style={{background:"#fff",borderBottom:"1px solid #e2e8f0",padding:"10px 16px",display:"flex",alignItems:"center",gap:10}}>
+          <button onClick={()=>setSelPrev(null)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#3b82f6",fontFamily:"inherit",padding:0}}>← Preventivi</button>
+          <span style={{color:"#94a3b8"}}>·</span>
+          <span style={{fontSize:14,fontWeight:700,color:"#0f172a"}}>{selPrev.patientName}</span>
+        </div>
+        <div style={{overflowY:"auto",padding:16,flex:1}}>
+          <PreventivoDettaglio
+            prev={selPrev}
+            onUpdate={upd => { onUpdate(upd); setSelPrev(upd); }}
+            onClose={()=>setSelPrev(null)}
+            onAccetta={(p,opz) => { onAccetta(p,opz); setSelPrev(null); }}
+            onRifiuta={(p,motivo) => { onRifiuta(p,motivo); setSelPrev(null); }}
+            onSpostaInCruscotto={p => { onSpostaInCruscotto(p); setSelPrev(null); }}
+          />
+        </div>
+      </React.Fragment>
+    );
+  }
+
+  return (
+    <React.Fragment>
+      <div style={{background:"#fff",borderBottom:"1px solid #e2e8f0",padding:"10px 16px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <h1 style={{margin:0,fontSize:15,fontWeight:700,color:"#0f172a"}}>📋 Preventivi in attesa</h1>
+        <button onClick={()=>setShowForm(true)} style={{padding:"6px 14px",border:"none",borderRadius:6,background:"#1e40af",color:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit"}}>+ Nuovo preventivo</button>
+      </div>
+
+      <div style={{overflowY:"auto",padding:14,flex:1}}>
+
+        {/* KPI */}
+        <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+          {[
+            ["In attesa",    attivi.length,      "#3b82f6"],
+            ["Follow-up oggi", fuOggi.length,    fuOggi.length>0?"#f97316":"#10b981"],
+            ["In scadenza",  inScad.length,      inScad.length>0?"#f97316":"#10b981"],
+            ["Scaduti",      scaduti.length,     scaduti.length>0?"#ef4444":"#10b981"],
+            ["Accettati",    accettati.length,   "#10b981"],
+            ["Tasso acc.",   `${tassoAcc}%`,     tassoAcc>=60?"#10b981":tassoAcc>=30?"#f59e0b":"#ef4444"],
+          ].map(([lab,val,c])=>(
+            <div key={lab} style={{background:"#fff",borderRadius:8,padding:"10px 14px",boxShadow:"0 1px 3px rgba(0,0,0,0.06)",flex:1,minWidth:90}}>
+              <div style={{fontSize:9,color:"#94a3b8",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:2}}>{lab}</div>
+              <div style={{fontSize:18,fontWeight:700,color:c}}>{val}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Filtri */}
+        <div style={{display:"flex",gap:4,marginBottom:12,flexWrap:"wrap"}}>
+          {PREV_FILTRI.map(f=>(
+            <button key={f.id} onClick={()=>setFiltro(f.id)} style={{padding:"4px 10px",border:"1px solid",borderRadius:16,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",background:filtro===f.id?"#1e40af":"#fff",color:filtro===f.id?"#fff":"#475569",borderColor:filtro===f.id?"#1e40af":"#e2e8f0"}}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tabella */}
+        <div style={{background:"#fff",borderRadius:9,overflow:"hidden",boxShadow:"0 1px 3px rgba(0,0,0,0.06)"}}>
+          {lista.length === 0 ? (
+            <div style={{padding:32,textAlign:"center",color:"#94a3b8",fontSize:12}}>Nessun preventivo per il filtro selezionato.</div>
+          ) : (
+            <table style={{width:"100%",borderCollapse:"collapse"}}>
+              <thead>
+                <tr style={{background:"#f8fafc"}}>
+                  {["Stato","Paziente","Codice","Consegna","Scadenza","Gg","Prossimo FU","Importo","Operatore",""].map(h=>(
+                    <th key={h} style={{padding:"7px 10px",textAlign:"left",fontSize:9,fontWeight:600,color:"#475569",textTransform:"uppercase",letterSpacing:"0.04em",borderBottom:"1px solid #e2e8f0"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lista.map((p,i) => {
+                  const s = PREV_STATI[p.stato] || PREV_STATI.waiting_response;
+                  const diff = daysDiff(p.dataScadenza);
+                  const fuDiff = p.prossimFollowup ? daysDiff(p.prossimFollowup) : null;
+                  return (
+                    <tr key={p.id} style={{borderBottom:"1px solid #f1f5f9",background:i%2===0?"#fff":"#fafbfc",cursor:"pointer"}} onClick={()=>setSelPrev(p)}>
+                      <td style={{padding:"8px 10px"}}>
+                        <span style={{padding:"2px 7px",borderRadius:8,fontSize:10,fontWeight:600,background:s.bg,color:s.color,whiteSpace:"nowrap"}}>{s.icon} {s.label}</span>
+                      </td>
+                      <td style={{padding:"8px 10px"}}>
+                        <div style={{fontSize:12,fontWeight:600,color:"#0f172a"}}>{p.patientName}</div>
+                        <div style={{fontSize:9,color:"#94a3b8"}}>{p.clinician}</div>
+                      </td>
+                      <td style={{padding:"8px 10px",fontSize:11,color:"#64748b",fontFamily:"monospace"}}>{p.codice}</td>
+                      <td style={{padding:"8px 10px",fontSize:11,color:"#475569"}}>{p.dataConsegna}</td>
+                      <td style={{padding:"8px 10px",fontSize:11,color:diff!==null&&diff<=5?"#f97316":"#475569",fontWeight:diff!==null&&diff<=5?600:400}}>{p.dataScadenza}</td>
+                      <td style={{padding:"8px 10px",fontSize:12,fontWeight:700,color:diff===null?"#94a3b8":diff<0?"#ef4444":diff<=5?"#f97316":"#0f172a"}}>
+                        {diff===null?"—":diff<0?`-${Math.abs(diff)}`:`${diff}`}
+                      </td>
+                      <td style={{padding:"8px 10px",fontSize:11,color:fuDiff!==null&&fuDiff<=0?"#ef4444":"#475569",fontWeight:fuDiff!==null&&fuDiff===0?700:400}}>
+                        {p.prossimFollowup ? (fuDiff===0?"OGGI":fuDiff<0?`${Math.abs(fuDiff)}gg fa`:p.prossimFollowup) : "—"}
+                      </td>
+                      <td style={{padding:"8px 10px",fontSize:12,fontWeight:600,color:"#0f172a"}}>€{p.importoTotale.toLocaleString()}</td>
+                      <td style={{padding:"8px 10px",fontSize:10,color:"#64748b"}}>{p.operatoreAssegnato.split('@')[0]}</td>
+                      <td style={{padding:"8px 10px",fontSize:11,color:"#3b82f6",fontWeight:600}}>→</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {showForm && (
+        <Modal title={editPrev?"Modifica preventivo":"Nuovo preventivo"} onClose={()=>{setShowForm(false);setEditPrev(null);}} wide>
+          <PreventivoForm
+            initial={editPrev}
+            onSave={p => { onNew(p); setShowForm(false); setEditPrev(null); }}
+            onClose={()=>{setShowForm(false);setEditPrev(null);}}
+          />
+        </Modal>
+      )}
+    </React.Fragment>
+  );
+}
+
 function PrivacyBanner({ onAccept }) {
   return <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.92)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:999, padding:14 }}><div style={{ background:"#fff", borderRadius:10, maxWidth:520, width:"100%", overflow:"hidden", maxHeight:"88vh", overflowY:"auto" }}><div style={{ background:"#1e40af", padding:"14px 20px" }}><div style={{ fontSize:9, color:"#93c5fd", textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:2 }}>Innova Clinique · Domodossola</div><div style={{ fontSize:14, color:"#fff", fontWeight:700 }}>Informativa trattamento dati personali</div><div style={{ fontSize:9, color:"#bfdbfe", marginTop:2 }}>Art. 13 GDPR 679/2016 · D.Lgs. 196/2003</div></div><div style={{ padding:"14px 20px", display:"flex", flexDirection:"column", gap:8 }}>{[["Titolare","Innova Clinique S.r.l. · Domodossola (VCO)"],["Finalità","Gestione clinica (Art.9 lett.h) · Contratto (Art.6 lett.b) · Obblighi legali (Art.6 lett.c) · Consenso (Art.6 lett.a)"],["Conservazione","Cartella clinica: 10 anni (D.Lgs.229/1999)"],["Diritti","Art.15 Accesso · Art.16 Rettifica · Art.17 Cancellazione* · Art.20 Portabilità · Art.21 Opposizione"]].map(([t,tx]) => <div key={t}><div style={{ fontSize:9, fontWeight:700, color:"#1e40af", textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:1 }}>{t}</div><div style={{ fontSize:11, color:"#374151", lineHeight:1.5 }}>{tx}</div></div>)}</div><div style={{ padding:"12px 20px", borderTop:"1px solid #e2e8f0", background:"#f8fafc" }}><button onClick={onAccept} style={{ width:"100%", padding:"10px", background:"#1e40af", color:"#fff", border:"none", borderRadius:7, fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>Ho letto e confermo — Accedi</button></div></div></div>;
 }
@@ -818,6 +1369,7 @@ function App({ session, onLogout }) {
   const [stStatus,   setStStatus]   = useState("loading");
   const [showBanner, setShowBanner] = useState(false);
   const [chatOpen,   setChatOpen]   = useState(false);
+  const [preventivi, setPreventivi] = useState([]);
 
   async function logout() { onLogout(); }
   const [searchQuery, setSearchQuery] = useState("");
@@ -856,6 +1408,20 @@ function App({ session, onLogout }) {
           setPatients(SEED); setSel(SEED.find(x => x.status === "rosso") || SEED[0]);
         }
       }
+      // Load preventivi
+      try {
+        const pv = storage.get(PREV_STORAGE_KEY);
+        if (pv && pv.value) {
+          const d = aggiornaTuttiStati(JSON.parse(pv.value));
+          setPreventivi(d);
+        } else {
+          const seed = aggiornaTuttiStati(PREV_SEED);
+          setPreventivi(seed);
+          storage.set(PREV_STORAGE_KEY, JSON.stringify(seed));
+        }
+      } catch (e) {
+        setPreventivi(aggiornaTuttiStati(PREV_SEED));
+      }
       setStStatus("idle");
     })();
   }, []);
@@ -875,6 +1441,84 @@ function App({ session, onLogout }) {
 
   const commit = useCallback((list, ns) => { setPatients(list); if (ns !== undefined) setSel(ns); persist(list); }, [persist]);
   const updateSel = useCallback(upd => { commit(patients.map(p => p.id === upd.id ? upd : p), upd); }, [patients, commit]);
+
+  function persistPreventivi(list) {
+    storage.set(PREV_STORAGE_KEY, JSON.stringify(list));
+  }
+
+  function savePrev(p) {
+    const exists = preventivi.find(x=>x.id===p.id);
+    let newList;
+    if (exists) {
+      newList = preventivi.map(x=>x.id===p.id?p:x);
+    } else {
+      const id = newPrevId(preventivi);
+      newList = [...preventivi, {...p, id}];
+    }
+    const updated = aggiornaTuttiStati(newList);
+    setPreventivi(updated);
+    persistPreventivi(updated);
+  }
+
+  function accettaPrev(p, opzioneAccettata) {
+    const updated = {
+      ...p, stato:"accepted", opzioneAccettata,
+      updatedAt:getToday(),
+      tasks:(p.tasks||[]).map(t=>({...t,stato:"done"})),
+      auditLog:[...(p.auditLog||[]), {ts:getTodayFull(), azione:"Preventivo accettato", statoPrec:p.stato, statoNuovo:"accepted", operatore:"Operatore"}],
+    };
+    const newList = preventivi.map(x=>x.id===p.id?updated:x);
+    setPreventivi(newList);
+    persistPreventivi(newList);
+  }
+
+  function rifiutaPrev(p, motivo) {
+    const updated = {
+      ...p, stato:"refused", motivoRifiuto:motivo,
+      updatedAt:getToday(),
+      tasks:(p.tasks||[]).map(t=>({...t,stato:"done"})),
+      auditLog:[...(p.auditLog||[]), {ts:getTodayFull(), azione:"Preventivo rifiutato", statoPrec:p.stato, statoNuovo:"refused", operatore:"Operatore"}],
+    };
+    const newList = preventivi.map(x=>x.id===p.id?updated:x);
+    setPreventivi(newList);
+    persistPreventivi(newList);
+  }
+
+  function spostaInCruscotto(prev) {
+    const nuovoPaz = {
+      id: makeNewId(patients),
+      name: prev.patientName,
+      age: 0,
+      phone: prev.patientPhone || "",
+      acceptedDate: getToday(),
+      clinician: prev.clinician,
+      planValue: prev.importoTotale,
+      invoiced: 0,
+      status: "verde",
+      tags: ["da-preventivo"],
+      currentPhase: "Percorso in apertura",
+      lastVisit: getToday(),
+      nextVisit: "Non fissata",
+      progress: 0,
+      totalMonths: 12,
+      disciplines: [],
+      alerts: [],
+      gdpr: defaultGdpr(getToday()),
+      pagamenti: { voci:[{ id:Date.now(), descrizione:`Piano accettato: ${prev.opzioneAccettata||"Piano unico"}`, importo:prev.importoTotale, fase:"" }], pagamenti:[] },
+      auditLog:[{ id:1, ts:getTodayFull(), azione:"Creato da preventivo", dettaglio:`Prev. ${prev.codice} — ${prev.patientName}`, operatore:"Segreteria" }],
+    };
+    const updatedPrev = {...prev, spostatoInCruscotto:true};
+    const newPrevList = preventivi.map(x=>x.id===prev.id?updatedPrev:x);
+    commit([...patients, nuovoPaz], nuovoPaz);
+    setPreventivi(newPrevList);
+    persistPreventivi(newPrevList);
+    setView("paziente");
+    setTab("timeline");
+  }
+
+  // Badge preventivi da fare oggi
+  const prevBadge = preventivi.filter(p=>["followup_due","expiring_soon"].includes(p.stato)||
+    (p.prossimFollowup&&daysDiff(p.prossimFollowup)===0)).length;
 
   function saveNewPatient(p)  { const id = makeNewId(patients); commit([...patients, {...p,id}], {...p,id}); setModal(null); }
   function saveEditPatient(p) { updateSel({...p, auditLog:[...(p.auditLog||[]), makeAuditEntry("Modifica dati","Aggiornato")]}); setModal(null); }
@@ -950,7 +1594,7 @@ function App({ session, onLogout }) {
           {[{l:"Attivi",v:patients.length,c:"#e2e8f0"},{l:"🔴",v:critPts,c:"#ef4444"},{l:"Alert",v:totalRed,c:"#f59e0b"},{l:"GDPR",v:missCons,c:missCons>0?"#ef4444":"#10b981"}].map(s => <div key={s.l} style={{ padding:"7px 0", textAlign:"center", borderRight:"1px solid #1e293b" }}><div style={{ fontSize:13, fontWeight:700, color:s.c }}>{s.v}</div><div style={{ fontSize:7, color:"#475569", textTransform:"uppercase", letterSpacing:"0.04em" }}>{s.l}</div></div>)}
         </div>
         <div style={{ padding:"6px 8px", borderBottom:"1px solid #1e293b", display:"flex", flexDirection:"column", gap:4 }}>
-          {[["📊","Panoramica","panoramica"],["📈","Business Monitor","business"],["🔒","GDPR","gdpr-view"]].map(([ic,lab,vid]) => <button key={lab} onClick={() => setView(vid)} style={{ width:"100%", padding:"5px 8px", background:view===vid?"#0f4c81":"#1e293b", color:view===vid?"#93c5fd":"#94a3b8", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}><span style={{ fontSize:12 }}>{ic}</span>{lab}</button>)}
+          {[["📊","Panoramica","panoramica"],["📈","Business Monitor","business"],["📋","Preventivi","preventivi"],["🔒","GDPR","gdpr-view"]].map(([ic,lab,vid]) => <button key={lab} onClick={() => setView(vid)} style={{ width:"100%", padding:"5px 8px", background:view===vid?"#0f4c81":"#1e293b", color:view===vid?"#93c5fd":"#94a3b8", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}><span style={{ fontSize:12 }}>{ic}</span>{lab}{vid==="preventivi"&&prevBadge>0&&<span style={{marginLeft:"auto",background:"#f97316",color:"#fff",borderRadius:8,fontSize:8,fontWeight:700,padding:"0 5px"}}>{prevBadge}</span>}</button>)}
           <button onClick={() => setModal("new-patient")} style={{ width:"100%", padding:"5px", background:"#1e40af", color:"#fff", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>+ Nuovo paziente</button>
           <button onClick={() => setChatOpen(o => !o)} style={{ width:"100%", padding:"5px 8px", background:chatOpen?"#7c3aed":"#1e293b", color:chatOpen?"#fff":"#94a3b8", border:`1px solid ${chatOpen?"#7c3aed":"#334155"}`, borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -1065,6 +1709,17 @@ function App({ session, onLogout }) {
             <BusinessMonitor patients={patients} onSelectPatient={(p) => { setSel(p); setView("paziente"); setTab("timeline"); }}/>
           </div>
         </React.Fragment>}
+
+        {view==="preventivi" && (
+          <PreventiviView
+            preventivi={preventivi}
+            onUpdate={upd => { const nl=preventivi.map(x=>x.id===upd.id?upd:x); setPreventivi(nl); persistPreventivi(nl); }}
+            onNew={savePrev}
+            onAccetta={accettaPrev}
+            onRifiuta={rifiutaPrev}
+            onSpostaInCruscotto={spostaInCruscotto}
+          />
+        )}
 
         {view==="gdpr-view" && <React.Fragment>
           <div style={{ background:"#fff", borderBottom:"1px solid #e2e8f0", padding:"10px 16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}><h1 style={{ margin:0, fontSize:15, fontWeight:700, color:"#0f172a" }}>Compliance GDPR</h1><ChatBtn/></div>
