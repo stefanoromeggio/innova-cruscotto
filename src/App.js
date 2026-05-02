@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { dbGet, dbUpsert } from './supabase';
+import SinotticoOverview from './sinottico/SinotticoOverview';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const STORAGE_KEY = "innova_v4";
@@ -703,8 +704,6 @@ function BusinessMonitor({ patients, onSelectPatient }) {
       </div>
     </div>
   );
-}
-
 }
 
 // ─── PREVENTIVI MODULE ────────────────────────────────────────────────────────
@@ -1595,6 +1594,11 @@ function App({ session, onLogout }) {
         </div>
         <div style={{ padding:"6px 8px", borderBottom:"1px solid #1e293b", display:"flex", flexDirection:"column", gap:4 }}>
           {[["📊","Panoramica","panoramica"],["📈","Business Monitor","business"],["📋","Preventivi","preventivi"],["🔒","GDPR","gdpr-view"]].map(([ic,lab,vid]) => <button key={lab} onClick={() => setView(vid)} style={{ width:"100%", padding:"5px 8px", background:view===vid?"#0f4c81":"#1e293b", color:view===vid?"#93c5fd":"#94a3b8", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}><span style={{ fontSize:12 }}>{ic}</span>{lab}{vid==="preventivi"&&prevBadge>0&&<span style={{marginLeft:"auto",background:"#f97316",color:"#fff",borderRadius:8,fontSize:8,fontWeight:700,padding:"0 5px"}}>{prevBadge}</span>}</button>)}
+          {session?.email === 'stefanoromeggio@innovaclinique.it' && (
+            <button onClick={() => setView("sinottico")} style={{ width:"100%", padding:"5px 8px", background:view==="sinottico"?"#0f4c81":"#1e293b", color:view==="sinottico"?"#93c5fd":"#94a3b8", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}>
+              <span style={{ fontSize:12 }}>🧭</span>Sinottico
+            </button>
+          )}
           <button onClick={() => setModal("new-patient")} style={{ width:"100%", padding:"5px", background:"#1e40af", color:"#fff", border:"none", borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit" }}>+ Nuovo paziente</button>
           <button onClick={() => setChatOpen(o => !o)} style={{ width:"100%", padding:"5px 8px", background:chatOpen?"#7c3aed":"#1e293b", color:chatOpen?"#fff":"#94a3b8", border:`1px solid ${chatOpen?"#7c3aed":"#334155"}`, borderRadius:5, fontSize:11, fontWeight:600, cursor:"pointer", fontFamily:"inherit", textAlign:"left", display:"flex", gap:5, alignItems:"center" }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -1709,6 +1713,8 @@ function App({ session, onLogout }) {
             <BusinessMonitor patients={patients} onSelectPatient={(p) => { setSel(p); setView("paziente"); setTab("timeline"); }}/>
           </div>
         </React.Fragment>}
+
+        {view==="sinottico" && <SinotticoOverview session={session} />}
 
         {view==="preventivi" && (
           <PreventiviView

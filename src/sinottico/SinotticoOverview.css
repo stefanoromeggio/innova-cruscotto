@@ -1,0 +1,564 @@
+/* ================================================================
+   SinotticoOverview.css
+   Stili scoped per il modulo SINOTTICO Executive Overview.
+   Tutte le classi iniziano con "sinottico-", "kpi-", "alert-"
+   o "isce-" per evitare collisioni con il resto del Cruscotto.
+
+   Palette: tema scuro profondo, coerente con i toni del menu
+   di navigazione esistente (App.js riga ~1595).
+   ================================================================ */
+
+/* ----------------------------------------------------------------
+   VARIABILI COLORE
+   Definite localmente per isolare il modulo dal resto del progetto.
+   ---------------------------------------------------------------- */
+.sinottico-page {
+  --s-bg:          #0f172a;   /* Background pagina — più profondo del menu */
+  --s-card:        #1e293b;   /* Background tile e card */
+  --s-border:      #334155;   /* Bordi sottili */
+  --s-text:        #e2e8f0;   /* Testo principale */
+  --s-text-muted:  #94a3b8;   /* Testo secondario / label */
+  --s-accent:      #2e75b6;   /* Blu accent */
+  --s-verde:       #4ade80;   /* Semaforo verde */
+  --s-giallo:      #facc15;   /* Semaforo giallo */
+  --s-arancione:   #fb923c;   /* Semaforo arancione */
+  --s-rosso:       #f87171;   /* Semaforo rosso */
+  --s-grigio:      #64748b;   /* Stato "dati insufficienti" */
+}
+
+
+/* ================================================================
+   LAYOUT PAGINA
+   ================================================================ */
+
+/* Contenitore principale della pagina SINOTTICO.
+   Sfondo più scuro del menu per dare identità visiva distinta
+   al modulo direzionale rispetto al cruscotto operativo. */
+.sinottico-page {
+  min-height: 100%;
+  background: var(--s-bg);
+  color: var(--s-text);
+  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+/* Messaggio "Area riservata" per utenti non autorizzati.
+   Centrato verticalmente, compatto, non invasivo. */
+.sinottico-no-access {
+  max-width: 480px;
+  margin: 80px auto;
+  text-align: center;
+  padding: 40px 32px;
+  background: var(--s-card);
+  border: 1px solid var(--s-border);
+  border-radius: 12px;
+}
+
+.sinottico-no-access h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--s-text);
+  margin: 0 0 12px;
+}
+
+.sinottico-no-access p {
+  font-size: 14px;
+  color: var(--s-text-muted);
+  margin: 0;
+}
+
+/* Messaggio di errore generico (rete, proxy, ecc.) */
+.sinottico-error {
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid var(--s-rosso);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--s-rosso);
+}
+
+
+/* ================================================================
+   HEADER — ISCE + CONTATORI ALERT + PULSANTE AGGIORNA
+   ================================================================ */
+
+/* Barra di comando in cima alla pagina: titolo a sinistra,
+   ISCE al centro, contatori alert e pulsante a destra.
+   Su mobile si impila verticalmente. */
+.sinottico-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: var(--s-card);
+  border: 1px solid var(--s-border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+/* Blocco titolo */
+.sinottico-header-title {
+  flex: 1;
+  min-width: 160px;
+}
+
+.sinottico-header-title h1 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  color: var(--s-text);
+  margin: 0 0 4px;
+  text-transform: uppercase;
+}
+
+.sinottico-header-title .sottotitolo {
+  font-size: 12px;
+  color: var(--s-text-muted);
+  font-style: italic;
+  margin: 0 0 4px;
+}
+
+.sinottico-header-title .data-oggi {
+  font-size: 11px;
+  color: var(--s-text-muted);
+  margin: 0;
+}
+
+/* Pulsante aggiorna — stile coerente con i pulsanti del menu */
+.sinottico-refresh-btn {
+  padding: 8px 16px;
+  background: var(--s-accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: opacity 150ms;
+}
+
+.sinottico-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.sinottico-refresh-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+
+/* ================================================================
+   BLOCCO ISCE
+   Il numero grande al centro dell'header — la prima cosa che
+   il Direttore vede aprendo la pagina.
+   ================================================================ */
+
+.isce-block {
+  text-align: center;
+  padding: 12px 28px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--s-border);
+  min-width: 130px;
+}
+
+.isce-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--s-text-muted);
+  margin-bottom: 4px;
+}
+
+.isce-value {
+  font-size: 52px;
+  font-weight: 800;
+  line-height: 1;
+  margin: 4px 0;
+  /* Il colore viene sovrascritto dalla classe variante isce-* */
+  color: var(--s-text);
+}
+
+.isce-frase {
+  font-size: 11px;
+  color: var(--s-text-muted);
+  margin-top: 4px;
+}
+
+/* Varianti colore per il numero ISCE in base alla zona di rischio */
+.isce-verde     .isce-value { color: var(--s-verde);     }
+.isce-giallo    .isce-value { color: var(--s-giallo);    }
+.isce-arancione .isce-value { color: var(--s-arancione); }
+.isce-rosso     .isce-value { color: var(--s-rosso);     }
+.isce-grigio    .isce-value { color: var(--s-grigio);    }
+
+
+/* ================================================================
+   CONTATORI ALERT
+   Pillole numeriche che mostrano quanti alert critici/alti
+   sono attivi — visibili anche senza scorrere alla sezione alert.
+   ================================================================ */
+
+.alert-counters {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.alert-counter {
+  text-align: center;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--s-border);
+  min-width: 56px;
+}
+
+.alert-counter.critica {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.alert-counter.alta {
+  background: rgba(250, 204, 21, 0.10);
+  border-color: rgba(250, 204, 21, 0.3);
+}
+
+.alert-counter.ok {
+  background: rgba(74, 222, 128, 0.08);
+  border-color: rgba(74, 222, 128, 0.25);
+  padding: 10px 20px;
+}
+
+.alert-counter-num {
+  display: block;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.alert-counter.critica .alert-counter-num { color: var(--s-rosso);    }
+.alert-counter.alta    .alert-counter-num { color: var(--s-giallo);   }
+.alert-counter.ok      .alert-counter-num { color: var(--s-verde);    font-size: 18px; }
+
+.alert-counter-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--s-text-muted);
+  margin-top: 3px;
+}
+
+
+/* ================================================================
+   KPI GRID
+   Griglia responsiva dei 7 tile KPI. Si adatta automaticamente
+   alla larghezza disponibile senza breakpoint rigidi.
+   ================================================================ */
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+/* Breakpoint espliciti per comportamento prevedibile */
+@media (max-width: 600px) {
+  .kpi-grid { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 601px) and (max-width: 900px) {
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+
+/* ================================================================
+   KPI TILE — singolo indicatore
+   ================================================================ */
+
+/* Card base — bordo sinistro colorato aggiunto dalla classe
+   variante kpi-verde/giallo/rosso. */
+.kpi-tile {
+  background: var(--s-card);
+  border: 1px solid var(--s-border);
+  border-left: 4px solid var(--s-grigio);  /* default se stato mancante */
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+.kpi-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+/* Varianti stato — bordo sinistro colorato */
+.kpi-tile.kpi-verde   { border-left-color: var(--s-verde);     }
+.kpi-tile.kpi-giallo  { border-left-color: var(--s-giallo);    }
+.kpi-tile.kpi-rosso   { border-left-color: var(--s-rosso);     }
+
+/* Header del tile: label a sinistra, dot semaforo a destra */
+.kpi-tile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Nome del KPI */
+.kpi-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--s-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0;
+}
+
+/* Pallino semaforo */
+.kpi-semaforo {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.kpi-semaforo.verde   { background: var(--s-verde);     }
+.kpi-semaforo.giallo  { background: var(--s-giallo);    }
+.kpi-semaforo.rosso   { background: var(--s-rosso);     }
+
+/* Valore principale — numero grande */
+.kpi-valore {
+  font-size: 36px;
+  font-weight: 800;
+  color: var(--s-text);
+  line-height: 1;
+}
+
+/* Delta rispetto al mese precedente */
+.kpi-delta {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.kpi-delta.positivo { color: var(--s-verde);   }
+.kpi-delta.negativo { color: var(--s-rosso);   }
+
+/* Descrizione breve del KPI */
+.kpi-descrizione {
+  font-size: 11px;
+  color: var(--s-text-muted);
+  line-height: 1.5;
+  margin: 0;
+  flex: 1;
+}
+
+/* Soglie in fondo al tile */
+.kpi-soglie {
+  font-size: 10px;
+  color: var(--s-grigio);
+  border-top: 1px solid var(--s-border);
+  padding-top: 6px;
+  margin-top: 4px;
+}
+
+
+/* ================================================================
+   SEZIONE ALERT
+   Lista collassabile degli alert attivi, sotto la griglia KPI.
+   ================================================================ */
+
+.alert-section {
+  margin-top: 8px;
+}
+
+.alert-section-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--s-text);
+  border-bottom: 2px solid var(--s-accent);
+  padding-bottom: 8px;
+  margin: 0 0 16px;
+}
+
+/* Messaggio "Nessun alert attivo" */
+.alert-empty {
+  color: var(--s-text-muted);
+  font-style: italic;
+  font-size: 13px;
+  padding: 16px 0;
+}
+
+/* Lista alert — zero stili di lista nativi */
+.alert-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Singolo alert — bordo sinistro colorato per severità,
+   header cliccabile per espandere il corpo. */
+.alert-item {
+  background: var(--s-card);
+  border: 1px solid var(--s-border);
+  border-left: 4px solid var(--s-grigio);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.alert-item.alert-critica { border-left-color: var(--s-rosso);    }
+.alert-item.alert-alta    { border-left-color: var(--s-giallo);   }
+.alert-item.alert-media   { border-left-color: var(--s-accent);   }
+
+/* Header cliccabile dell'alert */
+.alert-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.alert-header:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Codice breve (es. "A05") */
+.alert-codice {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--s-text-muted);
+  flex-shrink: 0;
+}
+
+/* Titolo dell'alert */
+.alert-titolo {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--s-text);
+}
+
+/* Freccia collapse/expand */
+.alert-chevron {
+  font-size: 11px;
+  color: var(--s-text-muted);
+  flex-shrink: 0;
+}
+
+/* Badge severità — pill colorata */
+.alert-badge {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.alert-badge.badge-critica { background: rgba(248, 113, 113, 0.2); color: var(--s-rosso);    }
+.alert-badge.badge-alta    { background: rgba(250, 204, 21,  0.2); color: var(--s-giallo);   }
+.alert-badge.badge-media   { background: rgba(46,  117, 182, 0.2); color: #60a5fa;           }
+
+/* Corpo espanso dell'alert */
+.alert-body {
+  padding: 0 16px 16px;
+  border-top: 1px solid var(--s-border);
+}
+
+/* Testo descrittivo dell'alert */
+.alert-descrizione {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--s-text-muted);
+  margin: 12px 0 8px;
+}
+
+/* Box azione suggerita */
+.alert-azione {
+  background: rgba(46, 117, 182, 0.1);
+  border: 1px solid rgba(46, 117, 182, 0.25);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--s-text);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+/* Area azioni (textarea + pulsanti) */
+.alert-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.alert-actions textarea {
+  width: 100%;
+  min-height: 64px;
+  padding: 8px 10px;
+  background: var(--s-bg);
+  border: 1px solid var(--s-border);
+  border-radius: 6px;
+  color: var(--s-text);
+  font-family: inherit;
+  font-size: 12px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.alert-actions textarea:focus {
+  outline: none;
+  border-color: var(--s-accent);
+}
+
+.alert-btn-row {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Stile base bottone azione alert */
+.alert-btn {
+  padding: 7px 14px;
+  border: 1px solid var(--s-border);
+  background: var(--s-bg);
+  color: var(--s-text-muted);
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: opacity 150ms;
+}
+
+.alert-btn:hover:not(:disabled) { opacity: 0.8; }
+.alert-btn:disabled              { opacity: 0.4; cursor: wait; }
+
+/* Variante primaria — "Risolvi" */
+.alert-btn-primary {
+  background: var(--s-accent);
+  color: #fff;
+  border-color: var(--s-accent);
+}
+
+/* Variante secondaria — "Ignora" */
+.alert-btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+}
